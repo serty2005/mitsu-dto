@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"log"
 	"net"
+	"os/exec"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,40 +48,42 @@ func main() {
 	if _, err := (MainWindow{
 		AssignTo: &mw,
 		Title:    "Mitsu Driver Utility",
-		MinSize:  Size{Width: 900, Height: 700},
-		Layout:   VBox{},
+		Size:     Size{Width: 460, Height: 500}, // Компактный старт
+		MinSize:  Size{Width: 460, Height: 400}, // Разрешаем сжимать по высоте
+		Layout:   VBox{Margins: Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 4},
 		Children: []Widget{
 			// --- Единая строка подключения ---
 			GroupBox{
 				Title:  "Подключение",
-				Layout: Grid{Columns: 5},
+				Layout: Grid{Columns: 5, Margins: Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 4},
 				Children: []Widget{
 					Label{Text: "Устройство:"},
 					ComboBox{
 						AssignTo: &addrCombo,
 						// ВАЖНО: Всегда Editable=true, чтобы можно было ввести IP.
-						// Если выбран COM порт, текст просто подставится сам.
 						Editable:              true,
 						Model:                 getInitialDeviceList(),
 						CurrentIndex:          0,
 						OnCurrentIndexChanged: onDeviceSelectionChanged,
 						OnTextChanged:         onDeviceTextChanged,
-						MinSize:               Size{Width: 250, Height: 0},
+						MinSize:               Size{Width: 150, Height: 0},
 					},
 
-					Label{Text: "Настройки (Baud/Port):"},
+					Label{Text: "Настройки:"},
 					ComboBox{
-						AssignTo: &paramInput,
-						Editable: true,
-						Model:    []string{"9600", "115200", "8200"},
-						Value:    defaultBaud,
-						MinSize:  Size{Width: 100, Height: 0},
+						AssignTo:      &paramInput,
+						Editable:      true,
+						Model:         []string{"9600", "115200", "8200"},
+						Value:         defaultBaud,
+						OnTextChanged: updateUIState, // Проверяем валидность порта при вводе
+						MinSize:       Size{Width: 70, Height: 0},
 					},
 
 					PushButton{
 						AssignTo:  &actionBtn,
 						Text:      "Подключить",
 						OnClicked: onActionBtnClicked,
+						MinSize:   Size{Width: 80},
 					},
 				},
 			},
@@ -87,29 +94,35 @@ func main() {
 					// 1. Информация
 					{
 						Title:  "Информация",
-						Layout: VBox{},
+						Layout: VBox{Margins: Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 						Children: []Widget{
 							PushButton{Text: "Обновить данные", OnClicked: refreshInfo},
 							TableView{
 								Model: infoModel,
+								// Ограничиваем размеры таблицы
+								MinSize: Size{Width: 200, Height: 150},
+								MaxSize: Size{Width: 1600, Height: 400}, // Высота не более 400
 								Columns: []TableViewColumn{
-									{Title: "Параметр", Width: 250},
-									{Title: "Значение", Width: 500},
+									{Title: "Параметр", Width: 140},
+									{Title: "Значение", Width: 250},
 								},
 							},
+							VSpacer{}, // Прижимаем таблицу к верху
 						},
 					},
-					// 2. Регистрация
-					GetRegistrationTab(),
-					// 3. Сервис
-					GetServiceTab(),
+					// // 2. Регистрация
+					// GetRegistrationTab(),
+					// // 3. Сервис
+					// GetServiceTab(),
 				},
 			},
 
 			// --- Лог ---
 			GroupBox{
-				Title:  "Лог обмена",
-				Layout: VBox{},
+				Title:   "Лог",
+				Layout:  VBox{MarginsZero: true},
+				MinSize: Size{Height: 60},  // Минимальная высота лога
+				MaxSize: Size{Height: 100}, // Максимальная высота лога
 				Children: []Widget{
 					TextEdit{
 						AssignTo: &logView,
@@ -131,59 +144,108 @@ func main() {
 func getInitialDeviceList() []string {
 	ports, _ := serial.GetPortsList()
 	sort.Strings(ports)
-	// Если портов нет, добавляем заглушку, чтобы список не был пустым
-	if len(ports) == 0 {
-		ports = append(ports, "COM-порты не найдены")
-	}
-	// Всегда добавляем пункт для LAN
+	// Всегда добавляем пункт для LAN в конец
 	ports = append(ports, itemSearchLAN)
 	return ports
 }
 
 // onDeviceSelectionChanged вызывается при выборе из выпадающего списка
+// onDeviceSelectionChanged вызывается при выборе из выпадающего списка
 func onDeviceSelectionChanged() {
 	if driver != nil {
 		return
-	} // Если подключены, игнорируем
+	}
 
-	selected := addrCombo.Text()
+	idx := addrCombo.CurrentIndex()
+	if idx < 0 {
+		return
+	}
 
-	// Проверяем, выбрал ли пользователь пункт "Поиск..."
-	// Важно: ComboBox.Text() возвращает текст выбранного элемента
+	// Получаем реальный выбранный текст из модели по индексу,
+	// так как addrCombo.Text() может быть еще не обновлен системой
+	model, ok := addrCombo.Model().([]string)
+	if !ok || idx >= len(model) {
+		return
+	}
+	selected := model[idx]
+
+	// Явно обновляем текст в поле, чтобы updateUIState увидел актуальное значение
+	if addrCombo.Text() != selected {
+		addrCombo.SetText(selected)
+	}
+
 	if selected == itemSearchLAN {
-		// Режим LAN/Поиск
-		// Очищаем поле, чтобы пользователь мог ввести IP или нажать Искать
-		// Делаем это через SetText(""), но аккуратно, чтобы не вызвать рекурсию событий
-		// В данном случае, просто сменим кнопку.
-		addrCombo.SetText("")
+		// Режим поиска
 		paramInput.SetText(defaultTCPPort)
-		actionBtn.SetText("Искать")
 	} else if strings.HasPrefix(selected, "COM") {
 		// Режим COM
 		paramInput.SetText(defaultBaud)
-		actionBtn.SetText("Подключить")
 	} else {
-		// IP адрес из списка (если ранее нашли)
+		// Режим IP (из истории)
 		paramInput.SetText(defaultTCPPort)
-		actionBtn.SetText("Подключить")
 	}
+
+	updateUIState()
 }
 
 // onDeviceTextChanged отслеживает ручной ввод
 func onDeviceTextChanged() {
+	updateUIState()
+}
+
+// updateUIState - центральная логика состояния кнопки и валидации
+func updateUIState() {
 	if driver != nil {
+		actionBtn.SetText("Отключить")
+		actionBtn.SetEnabled(true)
 		return
 	}
 
-	text := addrCombo.Text()
+	text := strings.TrimSpace(addrCombo.Text())
+	portText := strings.TrimSpace(paramInput.Text())
 
-	// Если текст пустой -> предлагаем Искать
-	if strings.TrimSpace(text) == "" {
+	// 1. Режим ПОИСКА
+	// Срабатывает, если поле пустое ИЛИ если в нем текст пункта меню "Поиск..."
+	if text == "" || text == itemSearchLAN {
 		actionBtn.SetText("Искать")
-	} else {
-		// Если что-то введено (IP или COM) -> предлагаем Подключить
-		actionBtn.SetText("Подключить")
+		actionBtn.SetEnabled(true)
+
+		// Подставляем порт поиска, если там сейчас скорость COM
+		if portText == "9600" || portText == "115200" {
+			paramInput.SetText(defaultTCPPort)
+		}
+		return
 	}
+
+	// 2. Режим COM-порта
+	if strings.HasPrefix(strings.ToUpper(text), "COM") {
+		actionBtn.SetText("Подключить")
+		actionBtn.SetEnabled(len(text) > 3 && portText != "")
+		return
+	}
+
+	// 3. Режим IP или Домена
+	// Если текст не пустой, не "Поиск..." и не "COM..." -> значит это ввод адреса
+	actionBtn.SetText("Подключить")
+
+	// Проверка на доменное имя (наличие букв)
+	isDomain := false
+	if match, _ := regexp.MatchString(`[a-zA-Z]`, text); match {
+		isDomain = true
+	}
+
+	// Если это домен и порт похож на скорость COM - очищаем, просим ввести порт
+	if isDomain && (portText == defaultBaud || portText == "9600") {
+		paramInput.SetText("")
+	}
+
+	// Валидация порта: должен быть числом
+	portValid := false
+	if _, err := strconv.Atoi(portText); err == nil {
+		portValid = true
+	}
+
+	actionBtn.SetEnabled(portValid)
 }
 
 func onActionBtnClicked() {
@@ -193,54 +255,43 @@ func onActionBtnClicked() {
 			logMsg("Ошибка отключения: %v", err)
 		}
 		driver = nil
-		actionBtn.SetText("Подключить")
+
 		addrCombo.SetEnabled(true)
 		paramInput.SetEnabled(true)
-
-		// Сбрасываем UI в исходное состояние
-		addrCombo.SetModel(getInitialDeviceList())
-		addrCombo.SetCurrentIndex(0)
-
+		updateUIState()
 		logMsg("Отключено.")
 		return
 	}
 
 	currentText := strings.TrimSpace(addrCombo.Text())
 
-	// 2. Сценарий Поиска (только если поле пустое)
-	// Или если явно выбран пункт меню (хотя он очищается при выборе)
-	if actionBtn.Text() == "Искать" || currentText == itemSearchLAN {
+	// 2. Сценарий Поиска
+	if actionBtn.Text() == "Искать" {
 		go runNetworkScan()
 		return
 	}
 
-	// 3. Сценарий Подключения (COM или IP)
+	// 3. Сценарий Подключения
 	cfg := mitsu.Config{
 		Timeout: 3000,
 		Logger:  func(s string) { logMsg(s) },
 	}
 
-	// Определяем тип подключения по формату строки
+	// Определяем тип подключения
 	if strings.HasPrefix(strings.ToUpper(currentText), "COM") {
 		cfg.ConnectionType = 0
 		cfg.ComName = currentText
 		fmt.Sscanf(paramInput.Text(), "%d", &cfg.BaudRate)
 	} else {
-		// Считаем что это IP
+		// IP или Домен
 		cfg.ConnectionType = 6
 		cfg.IPAddress = currentText
 		fmt.Sscanf(paramInput.Text(), "%d", &cfg.TCPPort)
-
-		if cfg.IPAddress == "" {
-			walk.MsgBox(mw, "Ошибка", "Введите IP адрес или нажмите Искать", walk.MsgBoxIconWarning)
-			return
-		}
 	}
 
 	logMsg("Подключение к %s...", getConnString(&cfg))
-	setControlsEnabled(false) // Блокируем на время попытки
+	setControlsEnabled(false)
 
-	// Запускаем подключение в горутине
 	go func() {
 		drv := mitsu.New(cfg)
 		if err := drv.Connect(); err != nil {
@@ -248,6 +299,7 @@ func onActionBtnClicked() {
 				logMsg("ОШИБКА: %v", err)
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Не удалось подключиться: %v", err), walk.MsgBoxIconError)
 				setControlsEnabled(true)
+				updateUIState()
 			})
 			return
 		}
@@ -255,10 +307,9 @@ func onActionBtnClicked() {
 		// Успех
 		mw.Synchronize(func() {
 			driver = drv
-			actionBtn.SetText("Отключить")
-			actionBtn.SetEnabled(true)
+			updateUIState()
 			logMsg("Успешное подключение!")
-			refreshInfo() // Автообновление инфо
+			refreshInfo()
 		})
 	}()
 }
@@ -276,117 +327,181 @@ func getConnString(c *mitsu.Config) string {
 	return fmt.Sprintf("%s:%d", c.IPAddress, c.TCPPort)
 }
 
-// --- Сканер сети ---
+// --- Сканер сети (ARP based) ---
 
 func runNetworkScan() {
 	mw.Synchronize(func() {
 		actionBtn.SetEnabled(false)
 		actionBtn.SetText("Сканирование...")
-		logMsg("--- Запуск сканирования сети (порт 8200) ---")
+		logMsg("--- Запуск поиска по ARP (MAC 00-22-00...) ---")
 	})
 
-	addrs, err := net.InterfaceAddrs()
+	// 1. "Прогрев" ARP
+	if err := triggerArpDiscovery(); err != nil {
+		logMsg("Ошибка инициации ARP: %v", err)
+	}
+
+	// Даем ОС время на обновление таблицы
+	time.Sleep(1 * time.Second)
+
+	// 2. Читаем таблицу
+	arpTable, err := getArpTable()
 	if err != nil {
-		logMsg("Ошибка получения интерфейсов: %v", err)
+		logMsg("Ошибка чтения ARP таблицы: %v", err)
 		restoreBtnState()
 		return
 	}
 
-	var targetIPs []string
-	for _, a := range addrs {
-		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				ip := ipnet.IP.To4()
-				baseIP := ip.Mask(ipnet.Mask)
-				for i := 1; i < 255; i++ {
-					targetIP := net.IPv4(baseIP[0], baseIP[1], baseIP[2], byte(i))
-					if !targetIP.Equal(ip) {
-						targetIPs = append(targetIPs, targetIP.String())
-					}
-				}
-			}
+	// 3. Фильтруем по MAC Mitsu
+	var candidates []string
+	mitsuPrefix := "00-22-00"
+
+	for ip, mac := range arpTable {
+		// Нормализуем MAC
+		cleanMac := strings.ReplaceAll(mac, "-", "")
+		cleanMac = strings.ReplaceAll(cleanMac, ":", "")
+		cleanMac = strings.ToUpper(cleanMac)
+		cleanPrefix := strings.ReplaceAll(mitsuPrefix, "-", "")
+
+		if strings.HasPrefix(cleanMac, cleanPrefix) {
+			logMsg("Найден кандидат в ARP: %s [%s]", ip, mac)
+			candidates = append(candidates, ip)
 		}
 	}
 
-	foundChan := make(chan string, 10)
+	if len(candidates) == 0 {
+		mw.Synchronize(func() {
+			logMsg("Устройства Mitsu не найдены в ARP.")
+			walk.MsgBox(mw, "Результат", "Устройства не найдены.\nПопробуйте пропинговать устройство вручную.", walk.MsgBoxIconInformation)
+			restoreBtnState()
+		})
+		return
+	}
+
+	// 4. Проверяем открытый порт 8200
+	foundChan := make(chan string, len(candidates))
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, 50)
 
-	for _, ip := range targetIPs {
+	logMsg("Проверка порта 8200 у %d кандидатов...", len(candidates))
+
+	for _, ip := range candidates {
 		wg.Add(1)
-		semaphore <- struct{}{}
-		go func(ip string) {
+		go func(targetIP string) {
 			defer wg.Done()
-			defer func() { <-semaphore }()
-
-			conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:8200", ip), 200*time.Millisecond)
-			if err != nil {
-				return
-			}
-			conn.Close()
-
-			// Проверка протокола
-			cfg := mitsu.Config{
-				ConnectionType: 6, IPAddress: ip, TCPPort: 8200, Timeout: 1000,
-			}
-			drv := mitsu.New(cfg)
-			if err := drv.Connect(); err == nil {
-				if _, _, mac, err := drv.GetVersion(); err == nil {
-					// Фильтр MAC Mitsu
-					if strings.HasPrefix(strings.ToUpper(mac), "00-22-00") {
-						foundChan <- ip
-					}
-				}
-				drv.Disconnect()
+			conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:8200", targetIP), 500*time.Millisecond)
+			if err == nil {
+				conn.Close()
+				foundChan <- targetIP
+			} else {
+				logMsg("IP %s: MAC совпал, но порт 8200 закрыт.", targetIP)
 			}
 		}(ip)
 	}
 
-	go func() {
-		wg.Wait()
-		close(foundChan)
-	}()
+	wg.Wait()
+	close(foundChan)
 
 	var foundList []string
 	for ip := range foundChan {
-		logMsg("НАЙДЕНО: %s", ip)
+		logMsg("ПОДТВЕРЖДЕНО: %s", ip)
 		foundList = append(foundList, ip)
 	}
 
 	mw.Synchronize(func() {
 		if len(foundList) > 0 {
-			// Обновляем список в комбобоксе
 			newList := getInitialDeviceList()
-			// Вставляем найденные IP перед пунктом "Поиск"
 			searchItem := newList[len(newList)-1]
 			newList = newList[:len(newList)-1]
 			newList = append(newList, foundList...)
 			newList = append(newList, searchItem)
 
 			addrCombo.SetModel(newList)
-
-			// Выбираем первый найденный IP
 			addrCombo.SetText(foundList[0])
-			actionBtn.SetText("Подключить")
-
-			logMsg("Сканирование завершено. Найдено %d устр.", len(foundList))
+			logMsg("Найдено %d устр.", len(foundList))
 		} else {
-			logMsg("Сканирование завершено. Устройства не найдены.")
-			walk.MsgBox(mw, "Результат", "Устройства Mitsu не найдены.", walk.MsgBoxIconInformation)
-
-			// Если ничего не нашли, сбрасываем в дефолт
-			addrCombo.SetText("")
-			actionBtn.SetText("Искать")
+			logMsg("Порт 8200 недоступен у найденных MAC.")
+			walk.MsgBox(mw, "Результат", "Устройства найдены по MAC, но порт 8200 закрыт.", walk.MsgBoxIconWarning)
 		}
+		updateUIState()
 		actionBtn.SetEnabled(true)
 	})
 }
 
 func restoreBtnState() {
 	mw.Synchronize(func() {
-		actionBtn.SetEnabled(true)
-		actionBtn.SetText("Искать")
+		updateUIState()
 	})
+}
+
+// triggerArpDiscovery пингует подсеть UDP пакетами
+func triggerArpDiscovery() error {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 100)
+
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP.IsLoopback() || ipnet.IP.To4() == nil {
+			continue
+		}
+
+		ip := ipnet.IP.To4()
+		mask := ipnet.Mask
+		ones, _ := mask.Size()
+		if ones < 24 {
+			continue // Пропускаем большие сети
+		}
+
+		baseIP := ip.Mask(mask)
+		for i := 1; i < 255; i++ {
+			targetIP := net.IPv4(baseIP[0], baseIP[1], baseIP[2], byte(i))
+			if targetIP.Equal(ip) {
+				continue
+			}
+
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(ipStr string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				// Шлем пакет на порт 8200 (или любой другой), чтобы инициировать ARP запрос
+				conn, err := net.DialTimeout("udp", fmt.Sprintf("%s:8200", ipStr), 100*time.Millisecond)
+				if err == nil {
+					conn.Write([]byte{0x00})
+					conn.Close()
+				}
+			}(targetIP.String())
+		}
+	}
+	wg.Wait()
+	return nil
+}
+
+// getArpTable парсит 'arp -a'
+func getArpTable() (map[string]string, error) {
+	cmd := exec.Command("arp", "-a")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]string)
+	// Регулярка для IP и MAC (поддержка Windows "-" и Unix ":")
+	re := regexp.MustCompile(`(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2})`)
+
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		matches := re.FindStringSubmatch(line)
+		if len(matches) == 3 {
+			result[matches[1]] = matches[2]
+		}
+	}
+	return result, nil
 }
 
 // --- Функции обновления данных и утилиты ---
@@ -420,18 +535,6 @@ func refreshInfo() {
 			addResult("Смена", fmt.Sprintf("№%d (%s)", sh.ShiftNum, st))
 		}
 	}()
-}
-
-func syncTime() {
-	if driver == nil {
-		return
-	}
-	now := time.Now().UTC()
-	if err := driver.SetDateTime(now); err != nil {
-		logMsg("Ошибка времени: %v", err)
-	} else {
-		logMsg("Время установлено (UTC): %s", now.Format("15:04:05"))
-	}
 }
 
 func logMsg(format string, args ...interface{}) {
