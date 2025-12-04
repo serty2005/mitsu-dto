@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/lxn/walk"
-	. "github.com/lxn/walk/declarative"
+	d "github.com/lxn/walk/declarative"
 )
 
 // -----------------------------
@@ -75,8 +75,6 @@ type ServiceViewModel struct {
 
 	HeaderModel *HeaderModel
 	FooterModel *FooterModel
-
-	ExchangeLog string
 }
 
 var serviceModel *ServiceViewModel
@@ -222,7 +220,7 @@ func startClocks() {
 // СОЗДАНИЕ ВКЛАДКИ
 // -----------------------------
 
-func GetServiceTab() TabPage {
+func GetServiceTab() d.TabPage {
 
 	serviceModel = &ServiceViewModel{
 		HeaderLines: make([]map[string]interface{}, 5),
@@ -242,33 +240,42 @@ func GetServiceTab() TabPage {
 	loadServiceInitial()
 	startClocks()
 
-	return TabPage{
+	return d.TabPage{
 		Title:  "Сервис",
-		Layout: VBox{Margins: Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}},
+		Layout: d.VBox{Margins: d.Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}},
 
-		Children: []Widget{
+		Children: []d.Widget{
 
 			// ---------------------------------------------------------------------
-			// 1. ВЕРХНЯЯ ПАНЕЛЬ ВРЕМЕНИ
+			// 1. ВЕРХНЯЯ ПАНЕЛЬ ВРЕМЕНИ И УПРАВЛЕНИЯ
 			// ---------------------------------------------------------------------
 
-			Composite{
-				Layout: HBox{MarginsZero: true, Spacing: 8},
-				Children: []Widget{
-					PushButton{
-						Text:      "Запросить время",
-						OnClicked: onQueryTime,
-						MinSize:   Size{Width: 140},
+			d.Composite{
+				Layout: d.Grid{Columns: 2, Spacing: 8},
+				Children: []d.Widget{
+					d.Composite{
+						Layout: d.HBox{Spacing: 8},
+						Children: []d.Widget{
+							d.PushButton{
+								Text:      "Запросить время",
+								OnClicked: onQueryTime,
+								MinSize:   d.Size{Width: 140},
+							},
+							d.Label{Text: "ККТ:"},
+							d.Label{Text: d.Bind("KktTime"), MinSize: d.Size{Width: 70}},
+							d.Label{Text: "ПК:"},
+							d.Label{Text: d.Bind("PcTime"), MinSize: d.Size{Width: 70}},
+							d.CheckBox{Text: "Режим обмена", Checked: d.Bind("ExchangeMode")},
+						},
 					},
-					Label{Text: "ККТ:"},
-					Label{Text: Bind("KktTime"), MinSize: Size{Width: 70}},
-					Label{Text: "ПК:"},
-					Label{Text: Bind("PcTime"), MinSize: Size{Width: 70}},
-					HSpacer{},
-					PushButton{
-						Text:      "Синхронизировать",
-						OnClicked: onSyncTime,
-						MinSize:   Size{Width: 150},
+					d.Composite{
+						Layout: d.HBox{Spacing: 8},
+						Children: []d.Widget{
+							d.PushButton{Text: "Перезагрузка", OnClicked: onRebootDevice},
+							d.PushButton{Text: "Тех. обнуление", OnClicked: onTechReset},
+							d.PushButton{Text: "Открыть ящик", OnClicked: onOpenDrawer},
+							d.PushButton{Text: "Печать X-отчёта", OnClicked: onPrintXReport},
+						},
 					},
 				},
 			},
@@ -277,103 +284,138 @@ func GetServiceTab() TabPage {
 			// 2. ПАРАМЕТРЫ ОФД / ОИСМ / LAN В ОДНОМ РЯДУ
 			// ---------------------------------------------------------------------
 
-			Composite{
-				Layout: HBox{Spacing: 10},
-				Children: []Widget{
+			d.Composite{
+				Layout: d.HBox{Spacing: 10},
+				Children: []d.Widget{
 
 					// ОФД
-					GroupBox{
+					d.GroupBox{
 						Title:  "ОФД",
-						Layout: Grid{Columns: 2, Spacing: 6},
-						Children: []Widget{
-							Label{Text: "Адрес:"},
-							LineEdit{Text: Bind("OfdAddr"), MinSize: Size{Width: 120}},
-							Label{Text: "Порт:"},
-							NumberEdit{Value: Bind("OfdPort"), MinSize: Size{Width: 60}},
-							Label{Text: "Клиент:"},
-							LineEdit{Text: Bind("OfdClient"), MinSize: Size{Width: 120}},
-							Label{Text: "Тайм-аут ФН:"},
-							NumberEdit{Value: Bind("TimerFN"), MinSize: Size{Width: 60}},
-							Label{Text: "Тайм-аут ОФД:"},
-							NumberEdit{Value: Bind("TimerOFD"), MinSize: Size{Width: 60}},
-							Composite{
-								Layout: HBox{Spacing: 6},
-								Children: []Widget{
-									PushButton{
-										Text:      "Прочитать",
-										OnClicked: onReadOfdSettings,
-										MinSize:   Size{Width: 80},
-									},
-									PushButton{
-										Text:      "Записать",
-										OnClicked: onWriteOfdSettings,
-										MinSize:   Size{Width: 80},
+						Layout: d.VBox{Spacing: 6},
+						Children: []d.Widget{
+							d.Composite{
+								Layout: d.HBox{Spacing: 6},
+								Children: []d.Widget{
+									d.Label{Text: "Адрес:"},
+									d.LineEdit{Text: d.Bind("OfdAddr"), MinSize: d.Size{Width: 120}},
+									d.Label{Text: "Порт:"},
+									d.NumberEdit{Value: d.Bind("OfdPort"), MinSize: d.Size{Width: 60}},
+								},
+							},
+							d.Composite{
+								Layout: d.HBox{Spacing: 6},
+								Children: []d.Widget{
+									d.Label{Text: "Клиент:"},
+									d.LineEdit{Text: d.Bind("OfdClient"), MinSize: d.Size{Width: 120}},
+									d.Label{Text: "Тайм-аут ФН:"},
+									d.NumberEdit{Value: d.Bind("TimerFN"), MinSize: d.Size{Width: 60}},
+								},
+							},
+							d.Composite{
+								Layout: d.HBox{Spacing: 6},
+								Children: []d.Widget{
+									d.Label{Text: "Тайм-аут ОФД:"},
+									d.NumberEdit{Value: d.Bind("TimerOFD"), MinSize: d.Size{Width: 60}},
+									d.HSpacer{},
+									d.Composite{
+										Layout: d.HBox{Spacing: 6},
+										Children: []d.Widget{
+											d.PushButton{
+												Text:      "Прочитать",
+												OnClicked: onReadOfdSettings,
+												MinSize:   d.Size{Width: 80},
+											},
+											d.PushButton{
+												Text:      "Записать",
+												OnClicked: onWriteOfdSettings,
+												MinSize:   d.Size{Width: 80},
+											},
+										},
 									},
 								},
 							},
-							HSpacer{},
 						},
 					},
 
 					// ОИСМ
-					GroupBox{
+					d.GroupBox{
 						Title:  "ОИСМ",
-						Layout: Grid{Columns: 2, Spacing: 6},
-						Children: []Widget{
-							Label{Text: "Адрес:"},
-							LineEdit{Text: Bind("OismAddr"), MinSize: Size{Width: 120}},
-							Label{Text: "Порт:"},
-							NumberEdit{Value: Bind("OismPort"), MinSize: Size{Width: 60}},
-							Composite{
-								Layout: HBox{Spacing: 6},
-								Children: []Widget{
-									PushButton{
-										Text:      "Прочитать",
-										OnClicked: onReadOismSettings,
-										MinSize:   Size{Width: 80},
-									},
-									PushButton{
-										Text:      "Записать",
-										OnClicked: onWriteOismSettings,
-										MinSize:   Size{Width: 80},
+						Layout: d.VBox{Spacing: 6},
+						Children: []d.Widget{
+							d.Composite{
+								Layout: d.HBox{Spacing: 6},
+								Children: []d.Widget{
+									d.Label{Text: "Адрес:"},
+									d.LineEdit{Text: d.Bind("OismAddr"), MinSize: d.Size{Width: 120}},
+									d.Label{Text: "Порт:"},
+									d.NumberEdit{Value: d.Bind("OismPort"), MinSize: d.Size{Width: 60}},
+									d.HSpacer{},
+									d.Composite{
+										Layout: d.HBox{Spacing: 6},
+										Children: []d.Widget{
+											d.PushButton{
+												Text:      "Прочитать",
+												OnClicked: onReadOismSettings,
+												MinSize:   d.Size{Width: 80},
+											},
+											d.PushButton{
+												Text:      "Записать",
+												OnClicked: onWriteOismSettings,
+												MinSize:   d.Size{Width: 80},
+											},
+										},
 									},
 								},
 							},
-							HSpacer{},
 						},
 					},
 
 					// LAN
-					GroupBox{
+					d.GroupBox{
 						Title:  "LAN",
-						Layout: Grid{Columns: 2, Spacing: 6},
-						Children: []Widget{
-							Label{Text: "IP:"},
-							LineEdit{Text: Bind("LanAddr"), MinSize: Size{Width: 120}},
-							Label{Text: "Маска:"},
-							LineEdit{Text: Bind("LanMask"), MinSize: Size{Width: 120}},
-							Label{Text: "Шлюз:"},
-							LineEdit{Text: Bind("LanGw"), MinSize: Size{Width: 120}},
-							Label{Text: "DNS:"},
-							LineEdit{Text: Bind("LanDns"), MinSize: Size{Width: 120}},
-							Label{Text: "Порт:"},
-							NumberEdit{Value: Bind("LanPort"), MinSize: Size{Width: 60}},
-							Composite{
-								Layout: HBox{Spacing: 6},
-								Children: []Widget{
-									PushButton{
-										Text:      "Прочитать",
-										OnClicked: onReadLanSettings,
-										MinSize:   Size{Width: 80},
-									},
-									PushButton{
-										Text:      "Записать",
-										OnClicked: onWriteLanSettings,
-										MinSize:   Size{Width: 80},
+						Layout: d.VBox{Spacing: 6},
+						Children: []d.Widget{
+							d.Composite{
+								Layout: d.HBox{Spacing: 6},
+								Children: []d.Widget{
+									d.Label{Text: "IP:"},
+									d.LineEdit{Text: d.Bind("LanAddr"), MinSize: d.Size{Width: 120}},
+									d.Label{Text: "Маска:"},
+									d.LineEdit{Text: d.Bind("LanMask"), MinSize: d.Size{Width: 120}},
+								},
+							},
+							d.Composite{
+								Layout: d.HBox{Spacing: 6},
+								Children: []d.Widget{
+									d.Label{Text: "Шлюз:"},
+									d.LineEdit{Text: d.Bind("LanGw"), MinSize: d.Size{Width: 120}},
+									d.Label{Text: "DNS:"},
+									d.LineEdit{Text: d.Bind("LanDns"), MinSize: d.Size{Width: 120}},
+								},
+							},
+							d.Composite{
+								Layout: d.HBox{Spacing: 6},
+								Children: []d.Widget{
+									d.Label{Text: "Порт:"},
+									d.NumberEdit{Value: d.Bind("LanPort"), MinSize: d.Size{Width: 60}},
+									d.HSpacer{},
+									d.Composite{
+										Layout: d.HBox{Spacing: 6},
+										Children: []d.Widget{
+											d.PushButton{
+												Text:      "Прочитать",
+												OnClicked: onReadLanSettings,
+												MinSize:   d.Size{Width: 80},
+											},
+											d.PushButton{
+												Text:      "Записать",
+												OnClicked: onWriteLanSettings,
+												MinSize:   d.Size{Width: 80},
+											},
+										},
 									},
 								},
 							},
-							HSpacer{},
 						},
 					},
 				},
@@ -383,27 +425,27 @@ func GetServiceTab() TabPage {
 			// 3. КЛИШЕ И ПОДВАЛ В ОДНОМ РЯДУ С КНОПКАМИ
 			// ---------------------------------------------------------------------
 
-			GroupBox{
+			d.GroupBox{
 				Title:  "Клише и Подвал",
-				Layout: HBox{Spacing: 10},
-				Children: []Widget{
+				Layout: d.HBox{Spacing: 10},
+				Children: []d.Widget{
 
 					// Левая таблица - Заголовок
-					Composite{
-						Layout: VBox{},
-						Children: []Widget{
-							TableView{
-								MinSize: Size{Width: 240, Height: 180},
-								Columns: []TableViewColumn{{Title: "Заголовок"}},
+					d.Composite{
+						Layout: d.VBox{},
+						Children: []d.Widget{
+							d.TableView{
+								MinSize: d.Size{Width: 240, Height: 80},
+								Columns: []d.TableViewColumn{{Title: "Заголовок"}},
 								Model:   serviceModel.HeaderModel,
 							},
-							Composite{
-								Layout: HBox{Spacing: 6},
-								Children: []Widget{
-									PushButton{Text: "Прочитать", OnClicked: func() {
+							d.Composite{
+								Layout: d.HBox{Spacing: 6},
+								Children: []d.Widget{
+									d.PushButton{Text: "Прочитать", OnClicked: func() {
 										onReadHeaderSingle(1)
 									}},
-									PushButton{Text: "Записать", OnClicked: func() {
+									d.PushButton{Text: "Записать", OnClicked: func() {
 										onWriteHeaderSingle(1)
 									}},
 								},
@@ -412,21 +454,21 @@ func GetServiceTab() TabPage {
 					},
 
 					// Правая таблица - Подвал
-					Composite{
-						Layout: VBox{},
-						Children: []Widget{
-							TableView{
-								MinSize: Size{Width: 240, Height: 180},
-								Columns: []TableViewColumn{{Title: "Подвал"}},
+					d.Composite{
+						Layout: d.VBox{},
+						Children: []d.Widget{
+							d.TableView{
+								MinSize: d.Size{Width: 240, Height: 80},
+								Columns: []d.TableViewColumn{{Title: "Подвал"}},
 								Model:   serviceModel.FooterModel,
 							},
-							Composite{
-								Layout: HBox{Spacing: 6},
-								Children: []Widget{
-									PushButton{Text: "Прочитать", OnClicked: func() {
+							d.Composite{
+								Layout: d.HBox{Spacing: 6},
+								Children: []d.Widget{
+									d.PushButton{Text: "Прочитать", OnClicked: func() {
 										onReadHeaderSingle(3)
 									}},
-									PushButton{Text: "Записать", OnClicked: func() {
+									d.PushButton{Text: "Записать", OnClicked: func() {
 										onWriteHeaderSingle(3)
 									}},
 								},
@@ -435,44 +477,12 @@ func GetServiceTab() TabPage {
 					},
 				},
 			},
-
-			// ---------------------------------------------------------------------
-			// 4. УПРАВЛЕНИЕ УСТРОЙСТВОМ
-			// ---------------------------------------------------------------------
-
-			Composite{
-				Layout: HBox{Spacing: 8},
-				Children: []Widget{
-					PushButton{Text: "Перезагрузка", OnClicked: onRebootDevice},
-					PushButton{Text: "Тех. обнуление", OnClicked: onTechReset},
-					PushButton{Text: "Открыть ящик", OnClicked: onOpenDrawer},
-					PushButton{Text: "Печать X-отчёта", OnClicked: onPrintXReport},
-				},
-			},
-
-			// ---------------------------------------------------------------------
-			// 5. ЛОГ ОБМЕНА
-			// ---------------------------------------------------------------------
-
-			GroupBox{
-				Title:  "Лог обмена",
-				Layout: VBox{},
-				Children: []Widget{
-					TextEdit{
-						Text:               Bind("ExchangeLog"),
-						ReadOnly:           true,
-						MinSize:            Size{Height: 150},
-						VScroll:            true,
-						AlwaysConsumeSpace: true,
-					},
-				},
-			},
 		},
 
-		DataBinder: DataBinder{
+		DataBinder: d.DataBinder{
 			AssignTo:       &serviceBinder,
 			DataSource:     serviceModel,
-			ErrorPresenter: ToolTipErrorPresenter{},
+			ErrorPresenter: d.ToolTipErrorPresenter{},
 		},
 	}
 }

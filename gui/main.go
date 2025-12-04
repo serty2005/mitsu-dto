@@ -15,7 +15,8 @@ import (
 	"time"
 
 	"github.com/lxn/walk"
-	. "github.com/lxn/walk/declarative"
+
+	d "github.com/lxn/walk/declarative"
 	"go.bug.st/serial"
 
 	"mitsuscanner/mitsu"
@@ -45,86 +46,90 @@ const (
 func main() {
 	infoModel = NewKeyValueModel()
 
-	if _, err := (MainWindow{
+	if _, err := (d.MainWindow{
 		AssignTo: &mw,
 		Title:    "Mitsu Driver Utility",
-		Size:     Size{Width: 460, Height: 500}, // Компактный старт
-		MinSize:  Size{Width: 460, Height: 400}, // Разрешаем сжимать по высоте
-		Layout:   VBox{Margins: Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 4},
-		Children: []Widget{
+		Size:     d.Size{Width: 460, Height: 500}, // Компактный старт
+		MinSize:  d.Size{Width: 460, Height: 470},
+		MaxSize:  d.Size{Width: 460, Height: 500},
+		Layout:   d.VBox{MarginsZero: true, Spacing: 5},
+		Children: []d.Widget{
 			// --- Единая строка подключения ---
-			GroupBox{
-				Title:  "Подключение",
-				Layout: Grid{Columns: 5, Margins: Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 4},
-				Children: []Widget{
-					Label{Text: "Устройство:"},
-					ComboBox{
-						AssignTo: &addrCombo,
-						// ВАЖНО: Всегда Editable=true, чтобы можно было ввести IP.
+			d.GroupBox{
+				// Title:  "Подключение",
+				Layout: d.Grid{Columns: 5, Margins: d.Margins{Left: 5, Top: 1, Right: 3, Bottom: 6}, Spacing: 4},
+				Children: []d.Widget{
+					d.Label{Text: "Устройство:"},
+					d.ComboBox{
+						AssignTo:              &addrCombo,
 						Editable:              true,
 						Model:                 getInitialDeviceList(),
 						CurrentIndex:          0,
 						OnCurrentIndexChanged: onDeviceSelectionChanged,
 						OnTextChanged:         onDeviceTextChanged,
-						MinSize:               Size{Width: 150, Height: 0},
+						MinSize:               d.Size{Width: 150, Height: 0},
 					},
 
-					Label{Text: "Настройки:"},
-					ComboBox{
+					d.Label{Text: "Настройки:"},
+					d.ComboBox{
 						AssignTo:      &paramInput,
 						Editable:      true,
 						Model:         []string{"9600", "115200", "8200"},
 						Value:         defaultBaud,
 						OnTextChanged: updateUIState, // Проверяем валидность порта при вводе
-						MinSize:       Size{Width: 70, Height: 0},
+						MinSize:       d.Size{Width: 70, Height: 0},
 					},
 
-					PushButton{
+					d.PushButton{
 						AssignTo:  &actionBtn,
 						Text:      "Подключить",
 						OnClicked: onActionBtnClicked,
-						MinSize:   Size{Width: 80},
+						MinSize:   d.Size{Width: 80},
 					},
 				},
 			},
 
 			// --- Вкладки ---
-			TabWidget{
-				Pages: []TabPage{
+			d.TabWidget{
+				Pages: []d.TabPage{
 					// 1. Информация
 					{
 						Title:  "Информация",
-						Layout: VBox{Margins: Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
-						Children: []Widget{
-							PushButton{Text: "Обновить данные", OnClicked: refreshInfo},
-							TableView{
+						Layout: d.VBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+						Children: []d.Widget{
+							d.PushButton{Text: "Обновить данные", OnClicked: refreshInfo},
+							d.TableView{
 								Model: infoModel,
 								// Ограничиваем размеры таблицы
-								MinSize: Size{Width: 200, Height: 150},
-								MaxSize: Size{Width: 1600, Height: 400}, // Высота не более 400
-								Columns: []TableViewColumn{
+								MinSize:            d.Size{Width: 200, Height: 150},
+								MaxSize:            d.Size{Width: 200, Height: 400},
+								AlwaysConsumeSpace: true,
+
+								Columns: []d.TableViewColumn{
 									{Title: "Параметр", Width: 140},
 									{Title: "Значение", Width: 250},
 								},
 							},
-							VSpacer{}, // Прижимаем таблицу к верху
+							d.VSpacer{}, // Прижимаем таблицу к верху
 						},
 					},
 					// // 2. Регистрация
-					// GetRegistrationTab(),
+					GetRegistrationTab(),
 					// // 3. Сервис
 					// GetServiceTab(),
 				},
 			},
 
+			d.VSpacer{},
+
 			// --- Лог ---
-			GroupBox{
+			d.GroupBox{
 				Title:   "Лог",
-				Layout:  VBox{MarginsZero: true},
-				MinSize: Size{Height: 60},  // Минимальная высота лога
-				MaxSize: Size{Height: 100}, // Максимальная высота лога
-				Children: []Widget{
-					TextEdit{
+				Layout:  d.VBox{MarginsZero: true},
+				MinSize: d.Size{Height: 100},
+				MaxSize: d.Size{Height: 200},
+				Children: []d.Widget{
+					d.TextEdit{
 						AssignTo: &logView,
 						ReadOnly: true,
 						VScroll:  true,

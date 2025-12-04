@@ -1,6 +1,5 @@
 /.kilocode
-/cli.exe
-/gui.exe
+*exe
 /helps
 /pack_go_files.py
 /project_dump.py
