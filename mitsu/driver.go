@@ -22,10 +22,10 @@ import (
 )
 
 const (
-	stx           = 0x02
-	etx           = 0x03
-	etb           = 0x17 // End of Transmission Block (для TCP пакетов)
-	maxTcpPayload = 535  // Максимальный размер данных в одном TCP пакете
+	stx            = 0x02
+	etx            = 0x03
+	etb            = 0x17 // End of Transmission Block (для TCP пакетов)
+	tcpDataChunkSz = 535  // Макс. кол-во данных в одном TCP пакете перед разбивкой
 )
 
 // Config определяет параметры для подключения к ККТ.
@@ -122,7 +122,7 @@ type Driver interface {
 type mitsuDriver struct {
 	config Config
 	mu     sync.Mutex
-	port   io.ReadWriteCloser
+	port   io.ReadWriteCloser // Используется только для COM.
 }
 
 func New(config Config) Driver {
@@ -141,15 +141,14 @@ func (d *mitsuDriver) Connect() error {
 	return d.connectLocked()
 }
 
-// connectLocked - внутренняя функция подключения (без мьютекса)
+// connectLocked выполняет подключение.
 func (d *mitsuDriver) connectLocked() error {
-	if d.port != nil {
-		return nil
-	}
-
 	var err error
 	switch d.config.ConnectionType {
 	case 0: // COM
+		if d.port != nil {
+			return nil
+		}
 		mode := &serial.Mode{
 			BaudRate: int(d.config.BaudRate),
 			DataBits: 8,
@@ -165,13 +164,16 @@ func (d *mitsuDriver) connectLocked() error {
 		}
 
 	case 6: // TCP/IP
+		// Для TCP мы используем режим "запрос-ответ" с короткими соединениями.
+		// Connect просто проверяет доступность хоста.
 		addr := net.JoinHostPort(d.config.IPAddress, strconv.Itoa(int(d.config.TCPPort)))
-		// Для TCP используем таймаут на подключение
 		conn, err := net.DialTimeout("tcp", addr, time.Duration(d.config.Timeout)*time.Millisecond)
 		if err != nil {
 			return fmt.Errorf("ошибка подключения TCP: %w", err)
 		}
-		d.port = conn
+		// Сразу закрываем, реальное соединение будет в performExchange
+		conn.Close()
+		// d.port остается nil для TCP
 
 	default:
 		return fmt.Errorf("неизвестный тип подключения: %d", d.config.ConnectionType)
@@ -200,67 +202,88 @@ func escapeXML(s string) string {
 	return buf.String()
 }
 
-// sendCommand отправляет команду с механизмом повтора (Reconnect) для TCP
+// sendCommand отправляет команду.
 func (d *mitsuDriver) sendCommand(xmlCmd string) ([]byte, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Максимальное количество попыток для TCP. Для COM - 1.
+	// Попытки нужны в основном для COM порта или если TCP моргнул
 	attempts := 1
-	if d.config.ConnectionType == 6 {
+	if d.config.ConnectionType == 0 {
 		attempts = 2
 	}
 
 	var lastErr error
 
 	for i := 0; i < attempts; i++ {
-		// Если порт закрыт, пробуем открыть (актуально для реконнекта)
-		if d.port == nil {
+		// 1. Проверяем состояние драйвера
+		if d.config.ConnectionType == 0 && d.port == nil {
 			if err := d.connectLocked(); err != nil {
 				lastErr = err
 				continue
 			}
 		}
 
+		// 2. Обмен
 		resp, err := d.performExchange(xmlCmd)
 		if err == nil {
 			return resp, nil
 		}
 
-		// Если ошибка, и это TCP, и мы еще можем повторить...
-		if d.config.ConnectionType == 6 && i < attempts-1 {
-			// Логируем факт реконнекта
+		lastErr = err
+
+		// 3. Retry логика (только для COM)
+		if d.config.ConnectionType == 0 && i < attempts-1 {
 			if d.config.Logger != nil {
-				d.config.Logger(fmt.Sprintf("TCP Error (%v). Reconnecting...", err))
+				d.config.Logger(fmt.Sprintf("COM Error (%v). Retrying...", err))
 			}
-			// Принудительно закрываем порт, чтобы connectLocked открыл новый
 			d.disconnectLocked()
-			lastErr = err
+			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-
-		return nil, err
 	}
 
 	return nil, lastErr
 }
 
-// performExchange выполняет один цикл отправки-приема (без логики реконнекта)
+// performExchange выполняет физическую отправку и прием данных
 func (d *mitsuDriver) performExchange(xmlCmd string) ([]byte, error) {
-	// ЛОГИРОВАНИЕ ОТПРАВКИ
 	if d.config.Logger != nil {
 		d.config.Logger(fmt.Sprintf(">> TX: %s", xmlCmd))
 	}
 
-	// 1. Подготовка данных
+	// 1. Подготовка данных (UTF-8 -> Win1251)
 	data, err := encodeCP1251(xmlCmd)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Отправка
+	var conn io.ReadWriteCloser
+
+	// Инициализация соединения
 	if d.config.ConnectionType == 0 {
 		// --- COM ---
+		if d.port == nil {
+			return nil, errors.New("port is closed")
+		}
+		conn = d.port
+	} else {
+		// --- TCP: Transactional Mode ---
+		// Открываем сокет на КАЖДЫЙ запрос
+		addr := net.JoinHostPort(d.config.IPAddress, strconv.Itoa(int(d.config.TCPPort)))
+		netConn, err := net.DialTimeout("tcp", addr, time.Duration(d.config.Timeout)*time.Millisecond)
+		if err != nil {
+			return nil, err
+		}
+		defer netConn.Close() // Гарантированно закрываем после обмена
+
+		netConn.SetDeadline(time.Now().Add(time.Duration(d.config.Timeout) * time.Millisecond))
+		conn = netConn
+	}
+
+	// 2. Отправка (Framing)
+	if d.config.ConnectionType == 0 {
+		// --- COM Framing (STX...ETX) ---
 		packet := make([]byte, 0, len(data)+5)
 		packet = append(packet, stx)
 		lenBuf := make([]byte, 2)
@@ -274,45 +297,51 @@ func (d *mitsuDriver) performExchange(xmlCmd string) ([]byte, error) {
 		}
 		packet = append(packet, lrc)
 
-		if _, err := d.port.Write(packet); err != nil {
+		if _, err := conn.Write(packet); err != nil {
 			return nil, err
 		}
 	} else {
-		// --- TCP ---
-		if tcpConn, ok := d.port.(net.Conn); ok {
-			tcpConn.SetWriteDeadline(time.Now().Add(time.Duration(d.config.Timeout) * time.Millisecond))
-		}
-
+		// --- TCP Framing (Chunked + ETB) ---
 		offset := 0
 		totalLen := len(data)
+
+		if totalLen == 0 {
+			return nil, errors.New("empty command")
+		}
+
 		for offset < totalLen {
 			remaining := totalLen - offset
 			chunkSize := remaining
-			if chunkSize > maxTcpPayload {
-				chunkSize = maxTcpPayload
+			if chunkSize > tcpDataChunkSz {
+				chunkSize = tcpDataChunkSz
 			}
 			chunk := data[offset : offset+chunkSize]
-			if _, err := d.port.Write(chunk); err != nil {
+
+			// Нужно ли слать ETB? (если это НЕ последний пакет)
+			isLastPacket := (offset + chunkSize) >= totalLen
+
+			if _, err := conn.Write(chunk); err != nil {
 				return nil, err
 			}
-			offset += chunkSize
-			if offset < totalLen {
-				if _, err := d.port.Write([]byte{etb}); err != nil {
+
+			if !isLastPacket {
+				if _, err := conn.Write([]byte{etb}); err != nil {
 					return nil, err
 				}
 			}
+			offset += chunkSize
 		}
 	}
 
-	// 3. Чтение
+	// 3. Чтение ответа
 	var responseData []byte
 
 	if d.config.ConnectionType == 0 {
-		// --- COM ---
+		// --- COM Reading ---
 		buf := make([]byte, 1)
 		readBuf := make([]byte, 0, 1024)
 		for {
-			n, err := d.port.Read(buf)
+			n, err := conn.Read(buf)
 			if err != nil {
 				return nil, err
 			}
@@ -322,7 +351,7 @@ func (d *mitsuDriver) performExchange(xmlCmd string) ([]byte, error) {
 			readBuf = append(readBuf, buf[0])
 			if buf[0] == etx {
 				lrcBuf := make([]byte, 1)
-				_, err := io.ReadFull(d.port, lrcBuf)
+				_, err := io.ReadFull(conn, lrcBuf)
 				if err != nil {
 					return nil, err
 				}
@@ -334,25 +363,18 @@ func (d *mitsuDriver) performExchange(xmlCmd string) ([]byte, error) {
 			return nil, errors.New("short response")
 		}
 		responseData = readBuf[:len(readBuf)-2]
-	} else {
-		// --- TCP ---
-		if tcpConn, ok := d.port.(net.Conn); ok {
-			tcpConn.SetReadDeadline(time.Now().Add(time.Duration(d.config.Timeout) * time.Millisecond))
-		}
 
+	} else {
+		// --- TCP Reading ---
 		accumulated := make([]byte, 0, 4096)
 		tempBuf := make([]byte, 1024)
 
 		for {
-			n, err := d.port.Read(tempBuf)
+			n, err := conn.Read(tempBuf)
 			if err != nil {
-				// Если EOF, но данные уже есть - это нормальное завершение для устройств,
-				// закрывающих сокет после ответа.
+				// EOF при TCP Transactional mode - это НОРМАЛЬНОЕ завершение,
+				// если мы уже получили данные. Устройство закрыло соединение после ответа.
 				if err == io.EOF && len(accumulated) > 0 {
-					break
-				}
-				// Если Timeout, но данные есть - тоже считаем успехом
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() && len(accumulated) > 0 {
 					break
 				}
 				return nil, err
@@ -362,29 +384,32 @@ func (d *mitsuDriver) performExchange(xmlCmd string) ([]byte, error) {
 			}
 
 			chunk := tempBuf[:n]
+
+			// Обработка ETB (признак продолжения)
 			hasEtb := false
 			if len(chunk) > 0 && chunk[len(chunk)-1] == etb {
 				hasEtb = true
 				chunk = chunk[:len(chunk)-1]
 			}
+
 			accumulated = append(accumulated, chunk...)
 
-			// Если был ETB, значит ждем еще. Если нет - проверяем конец XML.
+			// Если ETB нет, проверяем, не конец ли это XML
 			if !hasEtb {
-				// Простая проверка конца пакета
-				// Проверяем последние байты на наличие закрывающих тегов
-				// Для надежности декодируем хвост в строку (ASCII символы >, / совпадают)
-				tailLen := 20
-				if len(accumulated) < 20 {
+				tailLen := 50
+				if len(accumulated) < tailLen {
 					tailLen = len(accumulated)
 				}
 				tail := string(accumulated[len(accumulated)-tailLen:])
 
+				// Если видим закрывающий тег, считаем ответ полным и выходим,
+				// не дожидаясь таймаута или EOF.
 				if strings.Contains(tail, "/>") ||
 					strings.Contains(tail, "</OK>") ||
 					strings.Contains(tail, "</ERROR>") ||
 					strings.Contains(tail, "</ANS>") ||
-					strings.Contains(tail, "</Do>") {
+					strings.Contains(tail, "</Do>") ||
+					strings.Contains(tail, "</REG>") {
 					break
 				}
 			}
@@ -392,8 +417,12 @@ func (d *mitsuDriver) performExchange(xmlCmd string) ([]byte, error) {
 		responseData = accumulated
 	}
 
-	// 4. Проверка на ошибку уровня протокола
+	// 4. Проверка на логические ошибки
 	if bytes.Contains(responseData, []byte("ERROR")) {
+		if d.config.Logger != nil {
+			decodedLog, _ := toUTF8(responseData)
+			d.config.Logger(fmt.Sprintf("<< RX (ERR): %s", string(decodedLog)))
+		}
 		return nil, parseError(responseData)
 	}
 
