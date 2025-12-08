@@ -54,6 +54,7 @@ type FiscalInfo struct {
 	SoftwareDate     string `json:"bootVersion"`
 	FfdVersion       string `json:"ffdVersion"`
 	FnExecution      string `json:"fnExecution"`
+	FnEdition        string `json:"fn_edition"`
 	AttributeExcise  bool   `json:"attribute_excise"`
 	AttributeMarked  bool   `json:"attribute_marked"`
 }
@@ -117,6 +118,10 @@ type Driver interface {
 	RebootDevice() error
 	PrintDiagnostics() error
 	DeviceJob(job int) error
+
+	Feed(lines int) error
+	Cut() error
+	PrintLastDocument() error
 }
 
 type mitsuDriver struct {

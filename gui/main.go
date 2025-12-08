@@ -32,9 +32,10 @@ var (
 	paramInput *walk.ComboBox   // Скорость или Порт
 	actionBtn  *walk.PushButton // Кнопка действия (Искать/Подкл/Откл)
 
-	// Модели данных
-	infoModel *KeyValueModel
-	driver    mitsu.Driver
+	// Элементы вкладки "Информация"
+	infoView *walk.TextEdit // Текстовое поле для инфо
+
+	driver mitsu.Driver
 )
 
 const (
@@ -44,14 +45,12 @@ const (
 )
 
 func main() {
-	infoModel = NewKeyValueModel()
-
 	if _, err := (d.MainWindow{
 		AssignTo: &mw,
 		Title:    "Mitsu Driver Utility",
-		Size:     d.Size{Width: 460, Height: 500}, // Компактный старт
-		MinSize:  d.Size{Width: 460, Height: 470},
-		MaxSize:  d.Size{Width: 460, Height: 500},
+		Size:     d.Size{Width: 460, Height: 550},
+		MinSize:  d.Size{Width: 460, Height: 500},
+		MaxSize:  d.Size{Width: 460, Height: 600},
 		Layout:   d.VBox{MarginsZero: true, Spacing: 5},
 		Children: []d.Widget{
 			// --- Единая строка подключения ---
@@ -95,27 +94,38 @@ func main() {
 					// 1. Информация
 					{
 						Title:  "Информация",
-						Layout: d.VBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+						Layout: d.VBox{Margins: d.Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}, Spacing: 5},
 						Children: []d.Widget{
 							d.PushButton{Text: "Обновить данные", OnClicked: refreshInfo},
-							d.TableView{
-								Model: infoModel,
-								// Ограничиваем размеры таблицы
-								MinSize:            d.Size{Width: 200, Height: 150},
-								MaxSize:            d.Size{Width: 200, Height: 400},
-								AlwaysConsumeSpace: true,
-
-								Columns: []d.TableViewColumn{
-									{Title: "Параметр", Width: 140},
-									{Title: "Значение", Width: 250},
+							// Текстовое поле вместо таблицы
+							d.TextEdit{
+								AssignTo: &infoView,
+								ReadOnly: true,
+								VScroll:  true,
+								Font:     d.Font{Family: "Consolas", PointSize: 9}, // Моноширинный шрифт
+								MinSize:  d.Size{Width: 100, Height: 150},
+							},
+							// Панель операционных кнопок
+							d.Composite{
+								Layout: d.HBox{Alignment: d.AlignHCenterVCenter},
+								Children: []d.Widget{
+									d.Composite{
+										Layout: d.Grid{Columns: 2, Spacing: 10},
+										Children: []d.Widget{
+											d.PushButton{Text: "X-Отчет", OnClicked: onPrintX, MinSize: d.Size{Width: 160}},
+											d.PushButton{Text: "Копия документа", OnClicked: onPrintCopy, MinSize: d.Size{Width: 160}},
+											d.PushButton{Text: "Z-Отчет (Закрыть смену)", OnClicked: onPrintZ, MinSize: d.Size{Width: 160}},
+											d.PushButton{Text: "Прогон и отрезка", OnClicked: onFeedAndCut, MinSize: d.Size{Width: 160}},
+										},
+									},
 								},
 							},
-							d.VSpacer{}, // Прижимаем таблицу к верху
+							d.VSpacer{}, // Прижимаем контент к верху
 						},
 					},
-					// // 2. Регистрация
+					// 2. Регистрация
 					GetRegistrationTab(),
-					// // 3. Сервис
+					// 3. Сервис
 					// GetServiceTab(),
 				},
 			},
@@ -126,7 +136,7 @@ func main() {
 			d.GroupBox{
 				Title:   "Лог",
 				Layout:  d.VBox{MarginsZero: true},
-				MinSize: d.Size{Height: 100},
+				MinSize: d.Size{Height: 200},
 				MaxSize: d.Size{Height: 200},
 				Children: []d.Widget{
 					d.TextEdit{
@@ -154,7 +164,6 @@ func getInitialDeviceList() []string {
 	return ports
 }
 
-// onDeviceSelectionChanged вызывается при выборе из выпадающего списка
 // onDeviceSelectionChanged вызывается при выборе из выпадающего списка
 func onDeviceSelectionChanged() {
 	if driver != nil {
@@ -515,21 +524,36 @@ func refreshInfo() {
 	if driver == nil {
 		return
 	}
+	// Очищаем поле перед загрузкой (опционально, можно и не очищать)
+	mw.Synchronize(func() { infoView.SetText("Загрузка данных...") })
+
 	go func() {
-		infoModel.Clear()
 		info, err := driver.GetFiscalInfo()
 		if err != nil {
-			addResult("ОШИБКА", err.Error())
+			mw.Synchronize(func() {
+				infoView.SetText(fmt.Sprintf("ОШИБКА ПОЛУЧЕНИЯ ДАННЫХ:\r\n%v", err))
+			})
 			return
 		}
-		addResult("Модель ККТ", info.ModelName)
-		addResult("Заводской номер", info.SerialNumber)
-		addResult("Версия прошивки", info.SoftwareDate)
-		addResult("РНМ", info.RNM)
-		addResult("ИНН Владельца", info.Inn)
-		addResult("ОФД", info.OfdName)
-		addResult("Дата регистрации", info.RegistrationDate)
-		addResult("Версия ФФД", info.FfdVersion)
+
+		// Сбор данных в мапу для последующего форматирования
+		// Мы используем слайс структур для сохранения порядка
+		type kv struct {
+			k, v string
+		}
+		var lines []kv
+
+		lines = append(lines, kv{"Модель ККТ", info.ModelName})
+		lines = append(lines, kv{"Заводской номер", info.SerialNumber})
+		lines = append(lines, kv{"Версия прошивки", info.SoftwareDate})
+		lines = append(lines, kv{"РНМ", info.RNM})
+		lines = append(lines, kv{"ИНН организации", info.Inn})
+		lines = append(lines, kv{"Организация", info.OrganizationName})
+		lines = append(lines, kv{"ОФД", info.OfdName})
+		lines = append(lines, kv{"Дата регистрации", info.RegistrationDate})
+		lines = append(lines, kv{"Версия ФФД", info.FfdVersion})
+		lines = append(lines, kv{"Срок действия ФН", info.FnEndDate})
+		lines = append(lines, kv{"Исполнение ФН", info.FnEdition})
 
 		sh, err := driver.GetShiftStatus()
 		if err == nil {
@@ -537,8 +561,118 @@ func refreshInfo() {
 			if sh.State == "1" {
 				st = "Открыта"
 			}
-			addResult("Смена", fmt.Sprintf("№%d (%s)", sh.ShiftNum, st))
+			lines = append(lines, kv{"Смена", fmt.Sprintf("№%d (%s)", sh.ShiftNum, st)})
+
+			// Логика отображения неотправленных документов
+			ofdInfo := fmt.Sprintf("%d", sh.Ofd.Count)
+			if sh.Ofd.Count > 0 {
+				ofdInfo += fmt.Sprintf(" (Первый: №%d от %s %s)", sh.Ofd.First, sh.Ofd.Date, sh.Ofd.Time)
+			}
+			lines = append(lines, kv{"Неотправленных ФД", ofdInfo})
+
+		} else {
+			lines = append(lines, kv{"Смена", "Ошибка получения статуса"})
 		}
+
+		// Формирование текста с выравниванием
+		var sb strings.Builder
+		maxKeyLen := 0
+		for _, item := range lines {
+			if len(item.k) > maxKeyLen {
+				maxKeyLen = len(item.k)
+			}
+		}
+		// Добавим немного отступа
+		maxKeyLen += 2
+
+		for _, item := range lines {
+			// %-20s выравнивает по левому краю, добавляя пробелы справа
+			format := fmt.Sprintf("%%-%ds : %%s\r\n", maxKeyLen)
+			sb.WriteString(fmt.Sprintf(format, item.k, item.v))
+		}
+
+		finalText := sb.String()
+
+		mw.Synchronize(func() {
+			infoView.SetText(finalText)
+		})
+	}()
+}
+
+// --- Обработчики операционных кнопок ---
+
+func onPrintX() {
+	if driver == nil {
+		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
+		return
+	}
+	go func() {
+		if err := driver.PrintXReport(); err != nil {
+			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка печати", err.Error(), walk.MsgBoxIconError) })
+		} else {
+			logMsg("X-отчет распечатан успешно.")
+		}
+	}()
+}
+
+func onPrintCopy() {
+	if driver == nil {
+		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
+		return
+	}
+	go func() {
+		if err := driver.PrintLastDocument(); err != nil {
+			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка печати", err.Error(), walk.MsgBoxIconError) })
+		} else {
+			logMsg("Копия документа распечатана.")
+		}
+	}()
+}
+
+func onPrintZ() {
+	if driver == nil {
+		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
+		return
+	}
+
+	if walk.MsgBox(mw, "Подтверждение", "Вы действительно хотите закрыть смену (Z-отчет)?", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
+		return
+	}
+
+	go func() {
+		// Используем имя "Системный администратор" или пустую строку, если драйвер это позволяет
+		if err := driver.CloseShift("Администратор"); err != nil {
+			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка закрытия смены", err.Error(), walk.MsgBoxIconError) })
+			return
+		}
+		logMsg("Смена закрыта успешно. Печать отчета...")
+
+		// Автоматическая печать после успешного закрытия
+		time.Sleep(500 * time.Millisecond) // Небольшая пауза для надежности
+		if err := driver.PrintLastDocument(); err != nil {
+			mw.Synchronize(func() {
+				walk.MsgBox(mw, "Ошибка печати Z-отчета", err.Error(), walk.MsgBoxIconWarning)
+			})
+		}
+		refreshInfo() // Обновляем статус смены на экране
+	}()
+}
+
+func onFeedAndCut() {
+	if driver == nil {
+		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
+		return
+	}
+	go func() {
+		if err := driver.Feed(24); err != nil {
+			logMsg("Ошибка прогона бумаги: %v", err)
+			return
+		}
+		if err := driver.Cut(); err != nil {
+			logMsg("Ошибка отрезки: %v", err)
+			return
+		}
+		logMsg("Прогон и отрезка выполнены.")
 	}()
 }
 
@@ -550,32 +684,4 @@ func logMsg(format string, args ...interface{}) {
 	} else {
 		log.Print(fullMsg)
 	}
-}
-
-func addResult(key, val string) {
-	mw.Synchronize(func() { infoModel.Add(key, val) })
-}
-
-// KeyValueModel
-type KeyValueItem struct{ Key, Value string }
-type KeyValueModel struct {
-	walk.TableModelBase
-	items []*KeyValueItem
-}
-
-func NewKeyValueModel() *KeyValueModel { return &KeyValueModel{items: []*KeyValueItem{}} }
-func (m *KeyValueModel) RowCount() int { return len(m.items) }
-func (m *KeyValueModel) Value(row, col int) interface{} {
-	if col == 0 {
-		return m.items[row].Key
-	}
-	return m.items[row].Value
-}
-func (m *KeyValueModel) Add(key, value string) {
-	m.items = append(m.items, &KeyValueItem{Key: key, Value: value})
-	m.PublishRowsReset()
-}
-func (m *KeyValueModel) Clear() {
-	m.items = []*KeyValueItem{}
-	m.PublishRowsReset()
 }

@@ -194,3 +194,22 @@ func (d *mitsuDriver) DeviceJob(job int) error {
 	_, err := d.sendCommand(cmd)
 	return err
 }
+
+// Feed проматывает бумагу на указанное количество строк.
+func (d *mitsuDriver) Feed(lines int) error {
+	cmd := fmt.Sprintf("<FEED N='%d'/>", lines)
+	_, err := d.sendCommand(cmd)
+	return err
+}
+
+// Cut выполняет отрезку чека.
+func (d *mitsuDriver) Cut() error {
+	_, err := d.sendCommand("<CUT/>")
+	return err
+}
+
+// PrintLastDocument печатает последний сформированный документ (копию).
+func (d *mitsuDriver) PrintLastDocument() error {
+	_, err := d.sendCommand("<PRINT/>")
+	return err
+}

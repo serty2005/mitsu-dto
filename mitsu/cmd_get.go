@@ -85,6 +85,7 @@ func (d *mitsuDriver) GetFiscalInfo() (*FiscalInfo, error) {
 			FnSerial string `xml:"FN,attr"`    // Заводской номер ФН (атрибут FN, см пример стр 15)
 			FnValid  string `xml:"VALID,attr"` // Срок действия
 			FnFfd    string `xml:"FFD,attr"`   // Версия ФФД ФН
+			Edition  string `xml:"EDITION,attr"`
 		}
 		if err := decodeXML(resp, &r); err != nil {
 			return nil, fmt.Errorf("ошибка разбора статуса ФН: %w", err)
@@ -92,6 +93,7 @@ func (d *mitsuDriver) GetFiscalInfo() (*FiscalInfo, error) {
 		info.FnSerial = r.FnSerial
 		info.FnEndDate = r.FnValid
 		info.FnExecution = r.FnFfd
+		info.FnEdition = r.Edition
 	}
 
 	return info, nil
@@ -197,6 +199,14 @@ type ShiftStatus struct {
 	Count    int    `xml:"COUNT,attr"`
 	FdNum    int    `xml:"FD,attr"`
 	KeyValid int    `xml:"KeyValid,attr"`
+
+	// Вложенная структура для статуса обмена ОФД
+	Ofd struct {
+		Count int    `xml:"COUNT,attr"`
+		First int    `xml:"FIRST,attr"`
+		Date  string `xml:"DATE,attr"`
+		Time  string `xml:"TIME,attr"`
+	} `xml:"OFD"`
 }
 
 type ShiftTotals struct {
@@ -215,12 +225,13 @@ type ShiftTotals struct {
 }
 
 type FnStatus struct {
-	Serial string `xml:"FN,attr"`
-	Ffd    string `xml:"FFD,attr"`
-	Phase  string `xml:"PHASE,attr"`
-	Valid  string `xml:"VALID,attr"`
-	LastFD int    `xml:"LAST,attr"`
-	Flag   string `xml:"FLAG,attr"` // HEX маска предупреждений
+	Serial  string `xml:"FN,attr"`
+	Ffd     string `xml:"FFD,attr"`
+	Phase   string `xml:"PHASE,attr"`
+	Valid   string `xml:"VALID,attr"`
+	LastFD  int    `xml:"LAST,attr"`
+	Flag    string `xml:"FLAG,attr"` // HEX маска предупреждений
+	Edition string `xml:"EDITION,attr"`
 }
 
 type OfdExchangeStatus struct {
