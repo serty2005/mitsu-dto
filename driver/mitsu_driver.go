@@ -1,6 +1,4 @@
-// Package mitsu предоставляет интерфейс для взаимодействия с фискальными
-// регистраторами Mitsu 1-F через прямой протокол обмена (XML over COM/TCP).
-package mitsu
+package driver
 
 import (
 	"bytes"
@@ -39,98 +37,13 @@ type Config struct {
 	Logger         func(msg string) `json:"-"`
 }
 
-// FiscalInfo содержит агрегированную информацию о фискальном регистраторе.
-type FiscalInfo struct {
-	ModelName        string `json:"modelName"`
-	SerialNumber     string `json:"serialNumber"`
-	RNM              string `json:"RNM"`
-	OrganizationName string `json:"organizationName"`
-	Address          string `json:"address"`
-	Inn              string `json:"INN"`
-	FnSerial         string `json:"fn_serial"`
-	RegistrationDate string `json:"datetime_reg"`
-	FnEndDate        string `json:"dateTime_end"`
-	OfdName          string `json:"ofdName"`
-	SoftwareDate     string `json:"bootVersion"`
-	FfdVersion       string `json:"ffdVersion"`
-	FnExecution      string `json:"fnExecution"`
-	FnEdition        string `json:"fn_edition"`
-	AttributeExcise  bool   `json:"attribute_excise"`
-	AttributeMarked  bool   `json:"attribute_marked"`
-}
-
-// Driver определяет основной интерфейс для работы с ККТ.
-type Driver interface {
-	Connect() error
-	Disconnect() error
-	GetFiscalInfo() (*FiscalInfo, error)
-	GetModel() (string, error)
-	GetVersion() (string, string, string, error)
-	GetDateTime() (time.Time, error)
-	GetCashier() (string, string, error)
-	GetPrinterSettings() (*PrinterSettings, error)
-	GetMoneyDrawerSettings() (*DrawerSettings, error)
-	GetComSettings() (int32, error)
-	GetHeader(int) ([]string, error)
-	GetLanSettings() (*LanSettings, error)
-	GetOfdSettings() (*OfdSettings, error)
-	GetOismSettings() (*ServerSettings, error)
-	GetOkpSettings() (*ServerSettings, error)
-	GetTaxRates() (*TaxRates, error)
-	GetRegistrationData() (*RegData, error)
-	GetShiftStatus() (*ShiftStatus, error)
-	GetShiftTotals() (*ShiftTotals, error)
-	GetFnStatus() (*FnStatus, error)
-	GetOfdExchangeStatus() (*OfdExchangeStatus, error)
-	GetMarkingStatus() (*MarkingStatus, error)
-	GetTimezone() (int, error)
-	GetPowerStatus() (int, error)
-
-	SetPowerFlag(value int) error
-	SetDateTime(t time.Time) error
-	SetCashier(name string, inn string) error
-	SetComSettings(speed int32) error
-	SetPrinterSettings(settings PrinterSettings) error
-	SetMoneyDrawerSettings(settings DrawerSettings) error
-	SetHeaderLine(headerNum int, lineNum int, text string, format string) error
-	SetLanSettings(settings LanSettings) error
-	SetOfdSettings(settings OfdSettings) error
-	SetOismSettings(settings ServerSettings) error
-	SetOkpSettings(settings ServerSettings) error
-	SetOption(optionNum int, value int) error
-	SetTimezone(value int) error
-
-	Register(req RegistrationRequest) error
-	Reregister(req RegistrationRequest, reasons []int) error
-	CloseFiscalArchive() error
-
-	OpenShift(operator string) error
-	CloseShift(operator string) error
-	PrintXReport() error
-	PrintZReport() error
-	OpenCheck(checkType int, taxSystem int) error
-	AddPosition(pos ItemPosition) error
-	Subtotal() error
-	Payment(pay PaymentInfo) error
-	CloseCheck() error
-	CancelCheck() error
-	OpenCorrectionCheck(checkType int, taxSystem int) error
-	RebootDevice() error
-	PrintDiagnostics() error
-	DeviceJob(job int) error
-
-	Feed(lines int) error
-	Cut() error
-	PrintLastDocument() error
-}
-
 type mitsuDriver struct {
 	config Config
 	mu     sync.Mutex
 	port   io.ReadWriteCloser // Используется только для COM.
 }
 
-func New(config Config) Driver {
+func NewMitsuDriver(config Config) Driver {
 	if config.Timeout == 0 {
 		config.Timeout = 3000
 	}

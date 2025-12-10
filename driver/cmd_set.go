@@ -1,6 +1,4 @@
-// Package mitsu предоставляет интерфейс для взаимодействия с фискальными
-// регистраторами Mitsu 1-F через прямой протокол обмена (XML over COM/TCP).
-package mitsu
+package driver
 
 import (
 	"fmt"

@@ -1,24 +1,8 @@
-// Package mitsu предоставляет интерфейс для взаимодействия с фискальными
-// регистраторами Mitsu 1-F через прямой протокол обмена (XML over COM/TCP).
-package mitsu
+package driver
 
 import (
 	"fmt"
 )
-
-// ItemPosition содержит параметры позиции чека.
-type ItemPosition struct {
-	Name     string  `json:"name"`     // Наименование товара
-	Price    float64 `json:"price"`    // Цена
-	Quantity float64 `json:"quantity"` // Количество
-	TaxRate  int     `json:"taxRate"`  // Ставка НДС (0-6)
-}
-
-// PaymentInfo содержит параметры оплаты.
-type PaymentInfo struct {
-	Type   int     `json:"type"`   // Тип оплаты (0 - наличные, 1 - безналичные, ...)
-	Amount float64 `json:"amount"` // Сумма оплаты
-}
 
 // OpenShift открывает смену.
 func (d *mitsuDriver) OpenShift(operator string) error {
@@ -93,7 +77,7 @@ func (d *mitsuDriver) AddPosition(pos ItemPosition) error {
 		5: 5, // 0%
 		6: 6, // Без НДС
 	}
-	tax := taxMap[pos.TaxRate]
+	tax := taxMap[pos.Tax]
 	if tax == 0 {
 		tax = 6 // по умолчанию Без НДС
 	}
@@ -118,17 +102,17 @@ func (d *mitsuDriver) Payment(pay PaymentInfo) error {
 	var pa, pb, pc, pd, pe float64
 	switch pay.Type {
 	case 0: // наличные
-		pa = pay.Amount
+		pa = pay.Sum
 	case 1: // безналичные
-		pb = pay.Amount
+		pb = pay.Sum
 	case 2: // аванс
-		pc = pay.Amount
+		pc = pay.Sum
 	case 3: // кредит
-		pd = pay.Amount
+		pd = pay.Sum
 	case 4: // иная
-		pe = pay.Amount
+		pe = pay.Sum
 	default:
-		pb = pay.Amount // по умолчанию безналичные
+		pb = pay.Sum // по умолчанию безналичные
 	}
 
 	cmd := fmt.Sprintf("<Do CHECK='PAY' PA='%.2f' PB='%.2f' PC='%.2f' PD='%.2f' PE='%.2f'/></Do>",

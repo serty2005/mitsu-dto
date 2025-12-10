@@ -1,8 +1,8 @@
-package main
+package gui
 
 import (
 	"fmt"
-	"mitsuscanner/mitsu"
+	"mitsuscanner/driver"
 	"time"
 
 	"github.com/lxn/walk"
@@ -89,7 +89,9 @@ var kktTicker *time.Ticker
 // -----------------------------
 
 func loadServiceInitial() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
+
 		serviceModel.KktTime = "Нет подключения"
 		serviceModel.PcTime = time.Now().Format("15:04:05")
 		return
@@ -97,7 +99,7 @@ func loadServiceInitial() {
 
 	// Загружаем время
 	go func() {
-		t, err := driver.GetDateTime()
+		t, err := drv.GetDateTime()
 		if err != nil {
 			mw.Synchronize(func() {
 				serviceModel.KktTime = "Ошибка"
@@ -112,47 +114,53 @@ func loadServiceInitial() {
 
 	// Загружаем ОФД
 	go func() {
-		ofd, err := driver.GetOfdSettings()
+		ofd, err := drv.GetOfdSettings()
 		if err == nil {
 			mw.Synchronize(func() {
-				serviceModel.OfdAddr = ofd.Addr
-				serviceModel.OfdPort = ofd.Port
-				serviceModel.OfdClient = ofd.Client
-				serviceModel.TimerFN = ofd.TimerFN
-				serviceModel.TimerOFD = ofd.TimerOFD
+				if ofd != nil {
+					serviceModel.OfdAddr = ofd.Addr
+					serviceModel.OfdPort = ofd.Port
+					serviceModel.OfdClient = ofd.Client
+					serviceModel.TimerFN = ofd.TimerFN
+					serviceModel.TimerOFD = ofd.TimerOFD
+				}
 			})
 		}
 	}()
 
 	// Загружаем OISM
 	go func() {
-		oism, err := driver.GetOismSettings()
+		oism, err := drv.GetOismSettings()
 		if err == nil {
 			mw.Synchronize(func() {
-				serviceModel.OismAddr = oism.Addr
-				serviceModel.OismPort = oism.Port
+				if oism != nil {
+					serviceModel.OismAddr = oism.Addr
+					serviceModel.OismPort = oism.Port
+				}
 			})
 		}
 	}()
 
 	// Загружаем LAN
 	go func() {
-		lan, err := driver.GetLanSettings()
+		lan, err := drv.GetLanSettings()
 		if err == nil {
 			mw.Synchronize(func() {
-				serviceModel.LanAddr = lan.Addr
-				serviceModel.LanPort = lan.Port
-				serviceModel.LanMask = lan.Mask
-				serviceModel.LanDns = lan.Dns
-				serviceModel.LanGw = lan.Gw
+				if lan != nil {
+					serviceModel.LanAddr = lan.Addr
+					serviceModel.LanPort = lan.Port
+					serviceModel.LanMask = lan.Mask
+					serviceModel.LanDns = lan.Dns
+					serviceModel.LanGw = lan.Gw
+				}
 			})
 		}
 	}()
 
 	// Загружаем клише
 	go func() {
-		h, _ := driver.GetHeader(1)
-		f, _ := driver.GetHeader(3)
+		h, _ := drv.GetHeader(1)
+		f, _ := drv.GetHeader(3)
 
 		mw.Synchronize(func() {
 			for i := range serviceModel.HeaderLines {
@@ -492,13 +500,14 @@ func GetServiceTab() d.TabPage {
 // -----------------------------
 
 func onQueryTime() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		t, err := driver.GetDateTime()
+		t, err := drv.GetDateTime()
 		if err != nil {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Не удалось получить время: %v", err), walk.MsgBoxIconError)
@@ -514,7 +523,8 @@ func onQueryTime() {
 }
 
 func onSyncTime() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
@@ -522,7 +532,7 @@ func onSyncTime() {
 	now := time.Now()
 
 	go func() {
-		err := driver.SetDateTime(now)
+		err := drv.SetDateTime(now)
 		mw.Synchronize(func() {
 			if err != nil {
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Не удалось синхронизировать: %v", err), walk.MsgBoxIconError)
@@ -539,13 +549,14 @@ func onSyncTime() {
 // -----------------------------
 
 func onReadOfdSettings() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		ofd, err := driver.GetOfdSettings()
+		ofd, err := drv.GetOfdSettings()
 		if err != nil {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка чтения ОФД: %v", err), walk.MsgBoxIconError)
@@ -565,13 +576,14 @@ func onReadOfdSettings() {
 }
 
 func onWriteOfdSettings() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		err := driver.SetOfdSettings(mitsu.OfdSettings{
+		err := drv.SetOfdSettings(driver.OfdSettings{
 			Addr:     serviceModel.OfdAddr,
 			Port:     serviceModel.OfdPort,
 			Client:   serviceModel.OfdClient,
@@ -595,13 +607,14 @@ func onWriteOfdSettings() {
 // -----------------------------
 
 func onReadOismSettings() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		oism, err := driver.GetOismSettings()
+		oism, err := drv.GetOismSettings()
 		if err != nil {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка чтения ОИСМ: %v", err), walk.MsgBoxIconError)
@@ -618,13 +631,14 @@ func onReadOismSettings() {
 }
 
 func onWriteOismSettings() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		err := driver.SetOismSettings(mitsu.ServerSettings{
+		err := drv.SetOismSettings(driver.ServerSettings{
 			Addr: serviceModel.OismAddr,
 			Port: serviceModel.OismPort,
 		})
@@ -645,13 +659,14 @@ func onWriteOismSettings() {
 // -----------------------------
 
 func onReadLanSettings() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		lan, err := driver.GetLanSettings()
+		lan, err := drv.GetLanSettings()
 		if err != nil {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка чтения LAN: %v", err), walk.MsgBoxIconError)
@@ -671,13 +686,14 @@ func onReadLanSettings() {
 }
 
 func onWriteLanSettings() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		err := driver.SetLanSettings(mitsu.LanSettings{
+		err := drv.SetLanSettings(driver.LanSettings{
 			Addr: serviceModel.LanAddr,
 			Port: serviceModel.LanPort,
 			Mask: serviceModel.LanMask,
@@ -701,13 +717,14 @@ func onWriteLanSettings() {
 // -----------------------------
 
 func onRebootDevice() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		err := driver.RebootDevice()
+		err := drv.RebootDevice()
 		mw.Synchronize(func() {
 			if err != nil {
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка перезагрузки: %v", err), walk.MsgBoxIconError)
@@ -718,7 +735,8 @@ func onRebootDevice() {
 }
 
 func onTechReset() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
@@ -728,7 +746,7 @@ func onTechReset() {
 	}
 
 	go func() {
-		err := driver.DeviceJob(1)
+		err := drv.DeviceJob(1)
 		mw.Synchronize(func() {
 			if err != nil {
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка: %v", err), walk.MsgBoxIconError)
@@ -740,13 +758,14 @@ func onTechReset() {
 }
 
 func onOpenDrawer() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		err := driver.DeviceJob(2)
+		err := drv.DeviceJob(2)
 		mw.Synchronize(func() {
 			if err != nil {
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка: %v", err), walk.MsgBoxIconError)
@@ -756,13 +775,14 @@ func onOpenDrawer() {
 }
 
 func onPrintXReport() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		err := driver.PrintXReport()
+		err := drv.PrintXReport()
 		mw.Synchronize(func() {
 			if err != nil {
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка печати: %v", err), walk.MsgBoxIconError)
@@ -776,13 +796,14 @@ func onPrintXReport() {
 // -----------------------------
 
 func onReadHeaderSingle(mode int) {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
-		rows, err := driver.GetHeader(mode)
+		rows, err := drv.GetHeader(mode)
 		if err != nil {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка чтения: %v", err), walk.MsgBoxIconError)
@@ -812,7 +833,8 @@ func onReadHeaderSingle(mode int) {
 }
 
 func onWriteHeaderSingle(mode int) {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
@@ -831,7 +853,7 @@ func onWriteHeaderSingle(mode int) {
 
 	go func() {
 		for i, text := range list {
-			err := driver.SetHeaderLine(mode, i, text, "")
+			err := drv.SetHeaderLine(mode, i, text, "")
 			if err != nil {
 				mw.Synchronize(func() {
 					walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка записи строки %d: %v", i, err), walk.MsgBoxIconError)

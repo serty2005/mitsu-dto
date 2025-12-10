@@ -1,6 +1,4 @@
-// Package mitsu предоставляет интерфейс для взаимодействия с фискальными
-// регистраторами Mitsu 1-F через прямой протокол обмена (XML over COM/TCP).
-package mitsu
+package driver
 
 import (
 	"fmt"
@@ -9,43 +7,6 @@ import (
 
 // RegistrationRequest содержит параметры для регистрации/перерегистрации ККТ.
 // Поля соответствуют атрибутам и тегам команды <REG> (стр. 23 документации).
-type RegistrationRequest struct {
-	// Атрибуты (Attributes)
-	IsReregistration bool   `json:"-"` // false = Регистрация, true = Перерегистрация
-	Base             string `json:"-"` // Коды причин перерегистрации (через запятую, напр "1,5")
-
-	RNM            string `json:"rnm"`             // T1037 (Рег. номер)
-	Inn            string `json:"inn"`             // T1018 (ИНН Пользователя)
-	FfdVer         string `json:"ffd_ver"`         // T1209 (Версия ФФД)
-	TaxSystems     string `json:"tax_systems"`     // T1062 (СНО через запятую: "0,1")
-	TaxSystemBase  string `json:"tax_base"`        // T1062_Base (Базовая СНО - опционально)
-	AutomatNumber  string `json:"automat_num"`     // T1036 (Номер автомата)
-	InternetCalc   bool   `json:"internet_calc"`   // T1108 (Расчеты в Интернет)
-	Service        bool   `json:"service"`         // T1109 (Услуги)
-	BSO            bool   `json:"bso"`             // T1110 (БСО)
-	Lottery        bool   `json:"lottery"`         // T1126 (Лотерея)
-	Gambling       bool   `json:"gambling"`        // T1193 (Азартные игры)
-	Excise         bool   `json:"excise"`          // T1207 (Подакцизные товары)
-	Marking        bool   `json:"marking"`         // MARK (Маркировка)
-	PawnShop       bool   `json:"pawn_shop"`       // PAWN (Ломбард)
-	Insurance      bool   `json:"insurance"`       // INS (Страхование)
-	Catering       bool   `json:"catering"`        // DINE (Общепит)
-	Wholesale      bool   `json:"wholesale"`       // OPT (Опт)
-	Vending        bool   `json:"vending"`         // VEND (Вендинг)
-	AutomatMode    bool   `json:"automat_mode"`    // T1001 (Автоматический режим)
-	AutonomousMode bool   `json:"autonomous_mode"` // T1002 (Автономный режим)
-	Encryption     bool   `json:"encryption"`      // T1056 (Шифрование)
-	PrinterAutomat bool   `json:"printer_automat"` // T1221 (Принтер в автомате)
-
-	// Вложенные теги (Nested Tags)
-	OrgName     string `json:"org_name"`     // T1048
-	Address     string `json:"address"`      // T1009
-	Place       string `json:"place"`        // T1187
-	OfdName     string `json:"ofd_name"`     // T1046
-	OfdInn      string `json:"ofd_inn"`      // T1017
-	FnsSite     string `json:"fns_site"`     // T1060
-	SenderEmail string `json:"sender_email"` // T1117
-}
 
 // Register выполняет первичную регистрацию ККТ (5.1).
 func (d *mitsuDriver) Register(req RegistrationRequest) error {

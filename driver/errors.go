@@ -1,4 +1,4 @@
-package mitsu
+package driver
 
 // ErrorDescriptions содержит расшифровку кодов ошибок согласно Приложению 1 документации.
 var ErrorDescriptions = map[string]string{

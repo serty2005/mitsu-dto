@@ -1,11 +1,10 @@
-package main
+package gui
 
 import (
 	"fmt"
+	"mitsuscanner/driver"
 	"strconv"
 	"strings"
-
-	"mitsuscanner/mitsu"
 
 	"github.com/lxn/walk"
 	d "github.com/lxn/walk/declarative"
@@ -221,14 +220,15 @@ func GetRegistrationTab() d.TabPage {
 }
 
 func onReadRegistration() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
 		logMsg("=== НАЧАЛО ЧТЕНИЯ РЕГИСТРАЦИОННЫХ ДАННЫХ ===")
-		regData, err := driver.GetRegistrationData()
+		regData, err := drv.GetRegistrationData()
 		if err != nil {
 			logMsg("ОШИБКА получения данных: %v", err)
 			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
@@ -370,7 +370,7 @@ func onReadRegistration() {
 			logMsg("  TaxESHN: %v", regModel.TaxESHN)
 			logMsg("  TaxPat: %v", regModel.TaxPat)
 
-			// ИСПРАВЛЕНИЕ: используем Reset() для обновления UI из модели, а не Submit() который перезаписывает модель из UI
+			// Используем Reset() для обновления UI из модели, а не Submit() который перезаписывает модель из UI
 			logMsg("Вызов regBinder.Reset() для обновления UI...")
 			if err := regBinder.Reset(); err != nil {
 				logMsg("ОШИБКА обновления биндинга при загрузке данных: %v", err)
@@ -379,7 +379,7 @@ func onReadRegistration() {
 				logMsg("regBinder.Reset() выполнен успешно!")
 			}
 
-			// ДОБАВЛЕНО: логи после Submit для проверки значений модели
+			// Логи после Submit для проверки значений модели
 			logMsg("Проверка значений модели ПОСЛЕ regBinder.Submit():")
 			logMsg("  RNM: '%s'", regModel.RNM)
 			logMsg("  INN: '%s'", regModel.INN)
@@ -401,7 +401,8 @@ func onReadRegistration() {
 }
 
 func onRegister() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		return
 	}
 	if err := regBinder.Submit(); err != nil {
@@ -416,11 +417,11 @@ func onRegister() {
 	req := fillRequestFromModel()
 
 	go func() {
-		if err := driver.SetCashier("Администратор", ""); err != nil {
+		if err := drv.SetCashier("Администратор", ""); err != nil {
 			logMsg("Ошибка установки кассира: %v", err)
 			return
 		}
-		if err := driver.Register(req); err != nil {
+		if err := drv.Register(req); err != nil {
 			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка регистрации", err.Error(), walk.MsgBoxIconError) })
 		} else {
 			mw.Synchronize(func() {
@@ -432,7 +433,8 @@ func onRegister() {
 }
 
 func onReregister() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		return
 	}
 	if err := regBinder.Submit(); err != nil {
@@ -458,11 +460,11 @@ func onReregister() {
 	req := fillRequestFromModel()
 
 	go func() {
-		if err := driver.SetCashier("Администратор", ""); err != nil {
+		if err := drv.SetCashier("Администратор", ""); err != nil {
 			logMsg("Ошибка установки кассира: %v", err)
 			return
 		}
-		if err := driver.Reregister(req, reasons); err != nil {
+		if err := drv.Reregister(req, reasons); err != nil {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Ошибка перерегистрации", err.Error(), walk.MsgBoxIconError)
 			})
@@ -489,7 +491,8 @@ func onSelectReasons() {
 }
 
 func onReplaceFn() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		return
 	}
 	if err := regBinder.Submit(); err != nil {
@@ -500,11 +503,11 @@ func onReplaceFn() {
 	reasons := []int{1}
 
 	go func() {
-		if err := driver.SetCashier("Администратор", ""); err != nil {
+		if err := drv.SetCashier("Администратор", ""); err != nil {
 			logMsg("Ошибка установки кассира: %v", err)
 			return
 		}
-		if err := driver.Reregister(req, reasons); err != nil {
+		if err := drv.Reregister(req, reasons); err != nil {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Ошибка замены ФН", err.Error(), walk.MsgBoxIconError)
 			})
@@ -517,14 +520,15 @@ func onReplaceFn() {
 }
 
 func onCloseFn() {
-	if driver == nil {
+	drv := driver.Active
+	if drv == nil {
 		return
 	}
 	if walk.MsgBox(mw, "Подтверждение", "Вы действительно хотите закрыть фискальный архив?\nЭто необратимая операция!", walk.MsgBoxYesNo|walk.MsgBoxIconWarning) != walk.DlgCmdYes {
 		return
 	}
 	go func() {
-		if err := driver.CloseFiscalArchive(); err != nil {
+		if err := drv.CloseFiscalArchive(); err != nil {
 			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 		} else {
 			mw.Synchronize(func() {
@@ -534,8 +538,8 @@ func onCloseFn() {
 	}()
 }
 
-func fillRequestFromModel() mitsu.RegistrationRequest {
-	req := mitsu.RegistrationRequest{
+func fillRequestFromModel() driver.RegistrationRequest {
+	req := driver.RegistrationRequest{
 		RNM:            regModel.RNM,
 		Inn:            regModel.INN,
 		OrgName:        regModel.OrgName,
@@ -543,7 +547,7 @@ func fillRequestFromModel() mitsu.RegistrationRequest {
 		Place:          regModel.Place,
 		SenderEmail:    regModel.Email,
 		FnsSite:        regModel.Site,
-		FfdVer:         "1.2",
+		FfdVer:         regModel.FFD,
 		OfdName:        regModel.OFDName,
 		OfdInn:         regModel.OFDINN,
 		AutonomousMode: regModel.ModeAutonomous,
