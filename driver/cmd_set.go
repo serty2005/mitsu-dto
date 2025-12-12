@@ -169,3 +169,11 @@ func (d *mitsuDriver) SetPowerFlag(value int) error {
 	_, err := d.sendCommand(cmd)
 	return err
 }
+
+// TechReset выполняет технологическое обнуление устройства.
+// Команда: <SET FACTORY=”/>
+func (d *mitsuDriver) TechReset() error {
+	// Ответ: <OK SERIAL='...' FN_STATE='...'/>
+	_, err := d.sendCommand("<SET FACTORY=''/>")
+	return err
+}

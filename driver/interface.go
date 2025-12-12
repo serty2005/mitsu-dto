@@ -28,6 +28,7 @@ type Driver interface {
 	GetMarkingStatus() (*MarkingStatus, error)
 	GetTimezone() (int, error)
 	GetPowerStatus() (int, error)
+	GetOptions() (*DeviceOptions, error)
 
 	SetPowerFlag(value int) error
 	SetDateTime(t time.Time) error
@@ -61,10 +62,17 @@ type Driver interface {
 	RebootDevice() error
 	PrintDiagnostics() error
 	DeviceJob(job int) error
+	// TechReset выполняет технологическое обнуление (<SET FACTORY=''/>).
+	TechReset() error
 
 	Feed(lines int) error
 	Cut() error
 	PrintLastDocument() error
+
+	// UploadImage загружает изображение в память ККТ.
+	// index: 0 - логотип, 1-20 - пользовательские картинки.
+	// data: бинарные данные BMP файла.
+	UploadImage(index int, data []byte) error
 }
 
 // ActiveDriver - глобально активный драйвер

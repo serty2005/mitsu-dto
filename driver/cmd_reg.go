@@ -39,8 +39,6 @@ func (d *mitsuDriver) performRegistration(req RegistrationRequest) error {
 	attrs := fmt.Sprintf("BASE='%s' T1062='%s'", req.Base, req.TaxSystems)
 
 	// Добавляем опциональные атрибуты (флаги режимов)
-	// В Mitsu протоколе если флаг '0', его можно не передавать, но для надежности передадим '1' явно, где нужно.
-	// Документация говорит: T1108='признак...', значение '1'.
 	if req.InternetCalc {
 		attrs += " T1108='1'"
 	}
@@ -90,19 +88,6 @@ func (d *mitsuDriver) performRegistration(req RegistrationRequest) error {
 		attrs += " T1221='1'"
 	}
 
-	// Добавляем основные реквизиты в атрибуты (если это не перерегистрация с их сменой, но протокол позволяет слать все)
-	// Для перерегистрации T1018 и T1037 могут быть опущены, если не меняются, но обычно их шлют.
-	// ВНИМАНИЕ: Протокол (стр 24) говорит: "Те же, что при регистрации, ЗА ИСКЛЮЧЕНИЕМ T1018, T1037".
-	// Значит, при перерегистрации их в атрибуты пихать НЕЛЬЗЯ, если это не их смена?
-	// Стр 24: "При перерегистрации ИНН (T1018) и РНМ (T1037), заданные при первичной регистрации, не подлежат изменению".
-	// Значит, их вообще лучше не посылать при перерегистрации, или посылать те же самые?
-	// Пример на стр 24 показывает: <REG BASE='...' ...> без T1018/T1037 в атрибутах.
-	// Но в тегах (ниже) они могут быть.
-
-	if !req.IsReregistration {
-		attrs += fmt.Sprintf(" T1037='%s' T1018='%s'", req.RNM, req.Inn)
-	}
-
 	// Версия ФФД
 	if req.FfdVer != "" {
 		attrs += fmt.Sprintf(" T1209='%s'", req.FfdVer)
@@ -122,15 +107,13 @@ func (d *mitsuDriver) performRegistration(req RegistrationRequest) error {
 	tags += fmt.Sprintf("<T1009>%s</T1009>", escapeXML(req.Address))
 	tags += fmt.Sprintf("<T1187>%s</T1187>", escapeXML(req.Place))
 	tags += fmt.Sprintf("<T1046>%s</T1046>", escapeXML(req.OfdName))
-	// ИНН ОФД и ИНН Пользователя (дублируется в тегах по примеру стр. 23)
+	// ИНН ОФД
 	tags += fmt.Sprintf("<T1017>%s</T1017>", req.OfdInn)
 
-	// При перерегистрации ИНН пользователя часто не шлют, но в примере (стр 23) он есть в тегах для первичной.
-	// Для перерегистрации (стр 24): "Теги: Те же... за исключением <T1018> <T1037>".
-	if !req.IsReregistration {
-		tags += fmt.Sprintf("<T1018>%s</T1018>", req.Inn)
-		tags += fmt.Sprintf("<T1037>%s</T1037>", req.RNM)
-	}
+	// ИСПРАВЛЕНИЕ: Передаем ИНН и РНМ всегда, даже при перерегистрации.
+	// Ошибка 103 (TAG 1037) указывает на то, что устройство требует эти данные.
+	tags += fmt.Sprintf("<T1018>%s</T1018>", req.Inn)
+	tags += fmt.Sprintf("<T1037>%s</T1037>", req.RNM)
 
 	tags += fmt.Sprintf("<T1060>%s</T1060>", escapeXML(req.FnsSite))
 	tags += fmt.Sprintf("<T1117>%s</T1117>", escapeXML(req.SenderEmail))
@@ -151,13 +134,6 @@ func (d *mitsuDriver) performRegistration(req RegistrationRequest) error {
 func (d *mitsuDriver) CloseFiscalArchive() error {
 	// Для закрытия ФН нужно отправить MAKE FISCAL='CLOSE'
 	// И передать данные для отчета о закрытии (адрес, место, ОЗФН)
-	// Для простоты пока отправляем только команду закрытия,
-	// но по протоколу (стр 24) нужно передать параметры T1009, T1187 и т.д.
-	// Чтобы API был корректным, лучше сначала считать текущие параметры через GetRegistrationData,
-	// а потом передать их в команду закрытия.
-
-	// Здесь упрощенная реализация, предполагающая, что пользователь вызывает это осознанно.
-	// Правильнее было бы принимать аргументы адреса и места.
 	cmd := "<MAKE FISCAL='CLOSE'/>"
 	_, err := d.sendCommand(cmd)
 	return err

@@ -5,8 +5,9 @@ go 1.25.1
 require (
 	github.com/lxn/walk v0.0.0-20210112085537-c389da54e794
 	go.bug.st/serial v1.6.4
+	golang.org/x/image v0.34.0
 	golang.org/x/net v0.47.0
-	golang.org/x/text v0.31.0
+	golang.org/x/text v0.32.0
 )
 
 require (

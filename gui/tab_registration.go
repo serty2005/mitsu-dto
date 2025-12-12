@@ -41,7 +41,7 @@ type RegViewModel struct {
 	ModeInsurance  bool
 	ModeCatering   bool
 	ModeWholesale  bool
-	ModeVending    bool // ДОБАВЛЕНО
+	ModeVending    bool
 
 	// SNO (Taxation)
 	TaxOSN   bool // 0
@@ -69,7 +69,7 @@ func GetRegistrationTab() d.TabPage {
 				Children: []d.Widget{
 					d.Label{Text: "Регистрационный номер ККТ (РНМ):"},
 					d.LineEdit{Text: d.Bind("RNM"), MinSize: d.Size{Width: 150}},
-					d.PushButton{Text: "Вычислить (CRC)", OnClicked: func() { walk.MsgBox(mw, "Info", "Тут будет расчет КПК", walk.MsgBoxIconInformation) }},
+					d.PushButton{Text: "Вычислить (CRC)", OnClicked: onCalcRNM},
 				},
 			},
 
@@ -219,6 +219,34 @@ func GetRegistrationTab() d.TabPage {
 	}
 }
 
+// --- Обработчики событий ---
+
+// onCalcRNM открывает диалог генерации РНМ
+func onCalcRNM() {
+	// Сначала забираем данные из формы в модель
+	if err := regBinder.Submit(); err != nil {
+		return
+	}
+
+	inn := strings.TrimSpace(regModel.INN)
+	if len(inn) != 10 && len(inn) != 12 {
+		walk.MsgBox(mw, "Ошибка", "Для расчета РНМ заполните корректный ИНН пользователя (10 или 12 цифр).", walk.MsgBoxIconError)
+		return
+	}
+
+	// Пытаемся получить заводской номер из драйвера
+	serial := ""
+	if driver.Active != nil {
+		info, err := driver.Active.GetFiscalInfo()
+		if err == nil && info != nil {
+			serial = info.SerialNumber
+		}
+	}
+
+	// Запускаем диалог
+	runRnmGenerationDialog(inn, serial)
+}
+
 func onReadRegistration() {
 	drv := driver.Active
 	if drv == nil {
@@ -239,33 +267,6 @@ func onReadRegistration() {
 		logMsg("RNM: '%s'", regData.RNM)
 		logMsg("INN: '%s'", regData.Inn)
 		logMsg("OrgName: '%s'", regData.OrgName)
-		logMsg("Address: '%s'", regData.Address)
-		logMsg("Place: '%s'", regData.Place)
-		logMsg("EmailSender: '%s'", regData.EmailSender)
-		logMsg("Site: '%s'", regData.Site)
-		logMsg("OfdName: '%s'", regData.OfdName)
-		logMsg("OfdInn: '%s'", regData.OfdInn)
-
-		logMsg("=== ФЛАГИ РЕЖИМОВ РАБОТЫ ===")
-		logMsg("MarkAttr: '%s' -> %v", regData.MarkAttr, regData.MarkAttr == "1")
-		logMsg("ExciseAttr: '%s' -> %v", regData.ExciseAttr, regData.ExciseAttr == "1")
-		logMsg("InternetAttr: '%s' -> %v", regData.InternetAttr, regData.InternetAttr == "1")
-		logMsg("ServiceAttr: '%s' -> %v", regData.ServiceAttr, regData.ServiceAttr == "1")
-		logMsg("BsoAttr: '%s' -> %v", regData.BsoAttr, regData.BsoAttr == "1")
-		logMsg("LotteryAttr: '%s' -> %v", regData.LotteryAttr, regData.LotteryAttr == "1")
-		logMsg("GamblingAttr: '%s' -> %v", regData.GamblingAttr, regData.GamblingAttr == "1")
-		logMsg("PawnAttr: '%s' -> %v", regData.PawnAttr, regData.PawnAttr == "1")
-		logMsg("InsAttr: '%s' -> %v", regData.InsAttr, regData.InsAttr == "1")
-		logMsg("DineAttr: '%s' -> %v", regData.DineAttr, regData.DineAttr == "1")
-		logMsg("OptAttr: '%s' -> %v", regData.OptAttr, regData.OptAttr == "1")
-		logMsg("VendAttr: '%s' -> %v", regData.VendAttr, regData.VendAttr == "1")
-		logMsg("AutoModeAttr: '%s' -> %v", regData.AutoModeAttr, regData.AutoModeAttr == "1")
-		logMsg("AutonomAttr: '%s' -> %v", regData.AutonomAttr, regData.AutonomAttr == "1")
-		logMsg("EncryptAttr: '%s' -> %v", regData.EncryptAttr, regData.EncryptAttr == "1")
-		logMsg("PrintAutoAttr: '%s' -> %v", regData.PrintAutoAttr, regData.PrintAutoAttr == "1")
-
-		logMsg("=== СИСТЕМЫ НАЛОГООБЛОЖЕНИЯ ===")
-		logMsg("TaxSystems: '%s'", regData.TaxSystems)
 
 		mw.Synchronize(func() {
 			logMsg("=== НАЧАЛО ЗАПОЛНЕНИЯ ПОЛЕЙ В GUI ===")
@@ -279,17 +280,6 @@ func onReadRegistration() {
 			regModel.Site = regData.Site
 			regModel.OFDINN = regData.OfdInn
 			regModel.OFDName = regData.OfdName
-
-			logMsg("Основные поля заполнены:")
-			logMsg("  RNM: '%s'", regModel.RNM)
-			logMsg("  INN: '%s'", regModel.INN)
-			logMsg("  OrgName: '%s'", regModel.OrgName)
-			logMsg("  Address: '%s'", regModel.Address)
-			logMsg("  Place: '%s'", regModel.Place)
-			logMsg("  Email: '%s'", regModel.Email)
-			logMsg("  Site: '%s'", regModel.Site)
-			logMsg("  OFDINN: '%s'", regModel.OFDINN)
-			logMsg("  OFDName: '%s'", regModel.OFDName)
 
 			// Парсинг флагов из RegData
 			regModel.ModeMarking = (regData.MarkAttr == "1")
@@ -308,25 +298,7 @@ func onReadRegistration() {
 			regModel.ModeAutonomous = (regData.AutonomAttr == "1")
 			regModel.ModeEncryption = (regData.EncryptAttr == "1")
 
-			logMsg("Флаги режимов установлены:")
-			logMsg("  ModeMarking: %v (из '%s')", regModel.ModeMarking, regData.MarkAttr)
-			logMsg("  ModeExcise: %v (из '%s')", regModel.ModeExcise, regData.ExciseAttr)
-			logMsg("  ModeInternet: %v (из '%s')", regModel.ModeInternet, regData.InternetAttr)
-			logMsg("  ModeService: %v (из '%s')", regModel.ModeService, regData.ServiceAttr)
-			logMsg("  ModeBSO: %v (из '%s')", regModel.ModeBSO, regData.BsoAttr)
-			logMsg("  ModeLottery: %v (из '%s')", regModel.ModeLottery, regData.LotteryAttr)
-			logMsg("  ModeGambling: %v (из '%s')", regModel.ModeGambling, regData.GamblingAttr)
-			logMsg("  ModePawn: %v (из '%s')", regModel.ModePawn, regData.PawnAttr)
-			logMsg("  ModeInsurance: %v (из '%s')", regModel.ModeInsurance, regData.InsAttr)
-			logMsg("  ModeCatering: %v (из '%s')", regModel.ModeCatering, regData.DineAttr)
-			logMsg("  ModeWholesale: %v (из '%s')", regModel.ModeWholesale, regData.OptAttr)
-			logMsg("  ModeVending: %v (из '%s')", regModel.ModeVending, regData.VendAttr)
-			logMsg("  ModeAutomat: %v (из '%s' или '%s')", regModel.ModeAutomat, regData.PrintAutoAttr, regData.AutoModeAttr)
-			logMsg("  ModeAutonomous: %v (из '%s')", regModel.ModeAutonomous, regData.AutonomAttr)
-			logMsg("  ModeEncryption: %v (из '%s')", regModel.ModeEncryption, regData.EncryptAttr)
-
-			// Парсинг СНО (ИСПРАВЛЕНИЕ: используем T1062 из RegData)
-			// Строка вида "0,1,5"
+			// Парсинг СНО
 			regModel.TaxOSN = false
 			regModel.TaxUSN = false
 			regModel.TaxUSN_M = false
@@ -335,67 +307,30 @@ func onReadRegistration() {
 			regModel.TaxPat = false
 
 			taxParts := strings.Split(regData.TaxSystems, ",")
-			logMsg("Парсинг систем налогообложения из '%s':", regData.TaxSystems)
 			for _, t := range taxParts {
 				trimmedT := strings.TrimSpace(t)
 				switch trimmedT {
 				case "0":
 					regModel.TaxOSN = true
-					logMsg("  Установлен TaxOSN = true")
 				case "1":
 					regModel.TaxUSN = true
-					logMsg("  Установлен TaxUSN = true")
 				case "2":
 					regModel.TaxUSN_M = true
-					logMsg("  Установлен TaxUSN_M = true")
 				case "3":
 					regModel.TaxENVD = true
-					logMsg("  Установлен TaxENVD = true")
 				case "4":
 					regModel.TaxESHN = true
-					logMsg("  Установлен TaxESHN = true")
 				case "5":
 					regModel.TaxPat = true
-					logMsg("  Установлен TaxPat = true")
-				default:
-					logMsg("  Неизвестная система налогообложения: '%s'", trimmedT)
 				}
 			}
 
-			logMsg("Системы налогообложения после парсинга:")
-			logMsg("  TaxOSN: %v", regModel.TaxOSN)
-			logMsg("  TaxUSN: %v", regModel.TaxUSN)
-			logMsg("  TaxUSN_M: %v", regModel.TaxUSN_M)
-			logMsg("  TaxENVD: %v", regModel.TaxENVD)
-			logMsg("  TaxESHN: %v", regModel.TaxESHN)
-			logMsg("  TaxPat: %v", regModel.TaxPat)
-
-			// Используем Reset() для обновления UI из модели, а не Submit() который перезаписывает модель из UI
-			logMsg("Вызов regBinder.Reset() для обновления UI...")
 			if err := regBinder.Reset(); err != nil {
 				logMsg("ОШИБКА обновления биндинга при загрузке данных: %v", err)
 				walk.MsgBox(mw, "Ошибка биндинга", fmt.Sprintf("Ошибка обновления UI: %v", err), walk.MsgBoxIconError)
 			} else {
-				logMsg("regBinder.Reset() выполнен успешно!")
+				logMsg("Данные успешно загружены в форму.")
 			}
-
-			// Логи после Submit для проверки значений модели
-			logMsg("Проверка значений модели ПОСЛЕ regBinder.Submit():")
-			logMsg("  RNM: '%s'", regModel.RNM)
-			logMsg("  INN: '%s'", regModel.INN)
-			logMsg("  OrgName: '%s'", regModel.OrgName)
-			logMsg("  Address: '%s'", regModel.Address)
-			logMsg("  Place: '%s'", regModel.Place)
-			logMsg("  Email: '%s'", regModel.Email)
-			logMsg("  Site: '%s'", regModel.Site)
-			logMsg("  OFDINN: '%s'", regModel.OFDINN)
-			logMsg("  OFDName: '%s'", regModel.OFDName)
-			logMsg("  ModeAutonomous: %v", regModel.ModeAutonomous)
-			logMsg("  ModeEncryption: %v", regModel.ModeEncryption)
-			logMsg("  TaxOSN: %v", regModel.TaxOSN)
-			logMsg("  TaxUSN: %v", regModel.TaxUSN)
-
-			logMsg("=== ДАННЫЕ РЕГИСТРАЦИИ ОБРАБОТАНЫ ===")
 		})
 	}()
 }
@@ -589,4 +524,156 @@ func fillRequestFromModel() driver.RegistrationRequest {
 	req.TaxSystems = strings.Join(taxCodes, ",")
 
 	return req
+}
+
+// --- Логика генерации РНМ (CRC) ---
+
+// runRnmGenerationDialog запускает диалоговое окно для расчета РНМ
+func runRnmGenerationDialog(inn, serial string) {
+	var dlg *walk.Dialog
+	var acceptPB, cancelPB *walk.PushButton
+	var db *walk.DataBinder
+
+	// Модель для диалога
+	dlgModel := struct {
+		Serial   string
+		OrderNum string
+	}{
+		Serial:   serial,
+		OrderNum: "1", // По умолчанию 1
+	}
+
+	err := d.Dialog{
+		AssignTo:      &dlg,
+		Title:         "Генерация РНМ (CRC16)",
+		MinSize:       d.Size{Width: 350, Height: 200},
+		Layout:        d.VBox{},
+		DefaultButton: &acceptPB,
+		CancelButton:  &cancelPB,
+		DataBinder: d.DataBinder{
+			AssignTo:   &db,
+			DataSource: &dlgModel,
+		},
+		Children: []d.Widget{
+			d.Label{Text: "ИНН Пользователя (из формы):"},
+			d.LineEdit{Text: inn, ReadOnly: true}, // ИНН только для отображения
+
+			d.Label{Text: "Заводской номер ККТ (20 знаков):"},
+			d.LineEdit{Text: d.Bind("Serial"), MaxLength: 20},
+
+			d.Label{Text: "Порядковый номер регистрации (обычно 1):"},
+			d.LineEdit{Text: d.Bind("OrderNum"), MaxLength: 10},
+
+			d.Composite{
+				Layout: d.HBox{},
+				Children: []d.Widget{
+					d.HSpacer{},
+					d.PushButton{
+						AssignTo: &acceptPB,
+						Text:     "Сгенерировать",
+						OnClicked: func() {
+							if err := db.Submit(); err != nil {
+								return
+							}
+							if dlgModel.Serial == "" {
+								walk.MsgBox(dlg, "Ошибка", "Введите заводской номер", walk.MsgBoxIconError)
+								return
+							}
+
+							// Расчет
+							rnm, err := calculateRNM(dlgModel.OrderNum, inn, dlgModel.Serial)
+							if err != nil {
+								walk.MsgBox(dlg, "Ошибка расчета", err.Error(), walk.MsgBoxIconError)
+								return
+							}
+
+							// Применяем результат
+							regModel.RNM = rnm
+							if err := regBinder.Reset(); err != nil {
+								fmt.Println("Binder reset error:", err)
+							}
+							dlg.Accept()
+						},
+					},
+					d.PushButton{
+						AssignTo:  &cancelPB,
+						Text:      "Отмена",
+						OnClicked: func() { dlg.Cancel() },
+					},
+				},
+			},
+		},
+	}.Create(mw)
+
+	if err != nil {
+		walk.MsgBox(mw, "Error", err.Error(), walk.MsgBoxIconError)
+		return
+	}
+
+	dlg.Run()
+}
+
+// calculateRNM выполняет расчет РНМ по алгоритму CRC16-CCITT.
+// Формат входных данных для CRC:
+// Pad(Order, 10) + Pad(INN, 12) + Pad(Serial, 20)
+// Результат: Pad(Order, 10) + Pad(CRC, 6)
+func calculateRNM(orderNum, inn, serial string) (string, error) {
+	// 1. Формируем строку для расчета
+	paddedOrder := padLeft(orderNum, 10, '0')
+	paddedInn := padLeft(inn, 12, '0')
+	paddedSerial := padLeft(serial, 20, '0')
+
+	// Строка: 0000000001 + 007804437548 + 00000000000000000156 (пример)
+	calcString := paddedOrder + paddedInn + paddedSerial
+
+	// 2. Считаем CRC
+	crc := crc16ccitt([]byte(calcString))
+
+	// 3. Формируем хвост (CRC дополненный до 6 цифр нулями)
+	// Пример: CRC 33271 -> "033271"
+	crcStr := fmt.Sprintf("%d", crc)
+	paddedCrc := padLeft(crcStr, 6, '0')
+
+	// 4. Итоговый РНМ
+	finalRnm := paddedOrder + paddedCrc
+
+	// Логирование для отладки
+	logMsg("Calc RNM Info:")
+	logMsg("  Order: %s -> %s", orderNum, paddedOrder)
+	logMsg("  INN:   %s -> %s", inn, paddedInn)
+	logMsg("  Ser:   %s -> %s", serial, paddedSerial)
+	logMsg("  String: %s", calcString)
+	logMsg("  CRC Hex: %X, Dec: %d", crc, crc)
+	logMsg("  Result: %s", finalRnm)
+
+	return finalRnm, nil
+}
+
+// crc16ccitt вычисляет CRC-16 (CCITT False)
+// Poly: 0x1021, Init: 0xFFFF
+func crc16ccitt(data []byte) uint16 {
+	crc := uint16(0xFFFF)
+	for _, b := range data {
+		crc ^= uint16(b) << 8
+		for i := 0; i < 8; i++ {
+			if (crc & 0x8000) != 0 {
+				crc = (crc << 1) ^ 0x1021
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc
+}
+
+// padLeft дополняет строку символом padChar слева до длины length
+func padLeft(s string, length int, padChar byte) string {
+	if len(s) >= length {
+		return s // Или обрезать, если требуется строго length
+	}
+	padding := make([]byte, length-len(s))
+	for i := range padding {
+		padding[i] = padChar
+	}
+	return string(padding) + s
 }

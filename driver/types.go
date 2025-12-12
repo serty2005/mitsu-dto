@@ -233,3 +233,17 @@ type PaymentInfo struct {
 	Type int     `json:"type"` // Тип оплаты (0 - наличные, 1 - безналичные, ...)
 	Sum  float64 `json:"sum"`  // Сумма
 }
+
+// DeviceOptions содержит настройки устройства (b0-b9).
+type DeviceOptions struct {
+	B0 int `xml:"b0,attr"` // Разделители
+	B1 int `xml:"b1,attr"` // QR позиция
+	B2 int `xml:"b2,attr"` // Округление
+	B3 int `xml:"b3,attr"` // Авто-резак
+	B4 int `xml:"b4,attr"` // Авто-тест
+	B5 int `xml:"b5,attr"` // Открытие ящика (триггер)
+	B6 int `xml:"b6,attr"` // Звук конца бумаги
+	B7 int `xml:"b7,attr"` // Текст рядом с QR
+	B8 int `xml:"b8,attr"` // Печать кол-ва покупок
+	B9 int `xml:"b9,attr"` // Базовая СНО
+}

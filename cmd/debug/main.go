@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/lxn/walk"
 	d "github.com/lxn/walk/declarative"
 
@@ -9,18 +11,35 @@ import (
 )
 
 func main() {
-	driver.SetActive(driver.NewFakeDriver())
+	// Для отладки интерфейса БЕЗ кассы используем FakeDriver
+	fmt.Println("Запуск в режиме эмуляции (FakeDriver)...")
 
-	mw := &walk.MainWindow{}
+	// Инициализируем и сразу активируем фейковый драйвер
+	fake := driver.NewFakeDriver()
+	driver.SetActive(fake)
+
+	// Создаем структуру окна
+	mw := new(walk.MainWindow)
+
+	// ВАЖНО: Инициализируем глобальную переменную в пакете GUI,
+	// чтобы loadServiceInitial не падал с nil pointer.
+	gui.SetMainWindow(mw)
+
+	// Получаем вкладку сервиса
+	// Внутри GetServiceTab запустятся горутины, которые будут обращаться к gui.mw
 	tab := gui.GetServiceTab()
 
 	err := d.MainWindow{
 		AssignTo: &mw,
-		Title:    "DEBUG SERVICE TAB",
-		MinSize:  d.Size{900, 600},
+		Title:    "DEBUG SERVICE TAB (MOCK MODE)",
+		MinSize:  d.Size{Width: 900, Height: 600},
 		Layout:   d.VBox{},
 		Children: []d.Widget{
-			tab,
+			d.TabWidget{
+				Pages: []d.TabPage{
+					tab,
+				},
+			},
 		},
 	}.Create()
 

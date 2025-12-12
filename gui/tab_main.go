@@ -30,6 +30,11 @@ var (
 	infoView *walk.TextEdit // Текстовое поле для инфо
 )
 
+// SetMainWindow позволяет установить главное окно извне (для debug режима).
+func SetMainWindow(w *walk.MainWindow) {
+	mw = w
+}
+
 const (
 	itemSearchLAN  = "Поиск в сети / Ввести IP..."
 	defaultTCPPort = "8200"
@@ -119,7 +124,7 @@ func RunApp() error {
 					// 2. Регистрация
 					GetRegistrationTab(),
 					// 3. Сервис
-					// GetServiceTab(),
+					GetServiceTab(),
 				},
 			},
 

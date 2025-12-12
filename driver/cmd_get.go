@@ -464,3 +464,16 @@ func (d *mitsuDriver) GetTimezone() (int, error) {
 	_, err = fmt.Sscanf(r.Tz, "%d", &tz)
 	return tz, err
 }
+
+// GetOptions читает все опции устройства (4.13)
+func (d *mitsuDriver) GetOptions() (*DeviceOptions, error) {
+	resp, err := d.sendCommand("<OPTION/>")
+	if err != nil {
+		return nil, err
+	}
+	var opts DeviceOptions
+	if err := decodeXML(resp, &opts); err != nil {
+		return nil, err
+	}
+	return &opts, nil
+}
