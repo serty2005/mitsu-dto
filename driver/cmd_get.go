@@ -214,18 +214,30 @@ func (d *mitsuDriver) GetComSettings() (int32, error) {
 }
 
 // GetHeader (3.10)
-func (d *mitsuDriver) GetHeader(n int) ([]string, error) {
+func (d *mitsuDriver) GetHeader(n int) ([]ClicheLineData, error) {
 	cmd := fmt.Sprintf("<GET HEADER='%d'/>", n)
 	resp, err := d.sendCommand(cmd)
 	if err != nil {
 		return nil, err
 	}
 
-	// Структура ответа сложная: <OK ...><L0 ...>Текст</L0><L1 ...>Текст</L1></OK>
-	// Используем вспомогательную структуру для парсинга вложенных тегов
+	// В документации F, по факту FORM. Поддерживаем оба варианта.
 	type Line struct {
 		Text string `xml:",chardata"`
+		F    string `xml:"F,attr"`    // Старый вариант/Дока
+		Form string `xml:"FORM,attr"` // Реальный вариант
 	}
+	// Вспомогательная функция выбора непустого формата
+	getFmt := func(l Line) string {
+		if l.Form != "" {
+			return l.Form
+		}
+		if l.F != "" {
+			return l.F
+		}
+		return "000000"
+	}
+
 	type HeaderResp struct {
 		L0 Line `xml:"L0"`
 		L1 Line `xml:"L1"`
@@ -243,38 +255,18 @@ func (d *mitsuDriver) GetHeader(n int) ([]string, error) {
 		return nil, err
 	}
 
-	// Собираем непустые строки
-	var lines []string
-	if r.L0.Text != "" {
-		lines = append(lines, r.L0.Text)
-	}
-	if r.L1.Text != "" {
-		lines = append(lines, r.L1.Text)
-	}
-	if r.L2.Text != "" {
-		lines = append(lines, r.L2.Text)
-	}
-	if r.L3.Text != "" {
-		lines = append(lines, r.L3.Text)
-	}
-	if r.L4.Text != "" {
-		lines = append(lines, r.L4.Text)
-	}
-	if r.L5.Text != "" {
-		lines = append(lines, r.L5.Text)
-	}
-	if r.L6.Text != "" {
-		lines = append(lines, r.L6.Text)
-	}
-	if r.L7.Text != "" {
-		lines = append(lines, r.L7.Text)
-	}
-	if r.L8.Text != "" {
-		lines = append(lines, r.L8.Text)
-	}
-	if r.L9.Text != "" {
-		lines = append(lines, r.L9.Text)
-	}
+	lines := make([]ClicheLineData, 10)
+
+	lines[0] = ClicheLineData{Text: r.L0.Text, Format: getFmt(r.L0)}
+	lines[1] = ClicheLineData{Text: r.L1.Text, Format: getFmt(r.L1)}
+	lines[2] = ClicheLineData{Text: r.L2.Text, Format: getFmt(r.L2)}
+	lines[3] = ClicheLineData{Text: r.L3.Text, Format: getFmt(r.L3)}
+	lines[4] = ClicheLineData{Text: r.L4.Text, Format: getFmt(r.L4)}
+	lines[5] = ClicheLineData{Text: r.L5.Text, Format: getFmt(r.L5)}
+	lines[6] = ClicheLineData{Text: r.L6.Text, Format: getFmt(r.L6)}
+	lines[7] = ClicheLineData{Text: r.L7.Text, Format: getFmt(r.L7)}
+	lines[8] = ClicheLineData{Text: r.L8.Text, Format: getFmt(r.L8)}
+	lines[9] = ClicheLineData{Text: r.L9.Text, Format: getFmt(r.L9)}
 
 	return lines, nil
 }

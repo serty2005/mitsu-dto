@@ -37,6 +37,12 @@ type DrawerSettings struct {
 	Fall int `xml:"FALL,attr"`
 }
 
+// ClicheLineData содержит данные одной строки клише.
+type ClicheLineData struct {
+	Text   string
+	Format string // Строка вида "000000"
+}
+
 // LanSettings содержит настройки сети.
 type LanSettings struct {
 	Addr string `xml:"LAN,attr"`

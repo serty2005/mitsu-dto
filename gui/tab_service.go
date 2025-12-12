@@ -55,54 +55,127 @@ var (
 		{"UTC+8 (Иркутск)", "8"}, {"UTC+9 (Якутск)", "9"}, {"UTC+10 (Владивосток)", "10"},
 		{"UTC+11 (Магадан)", "11"}, {"UTC+12 (Камчатка)", "12"},
 	}
+
+	// --- Для КЛИШЕ ---
+	listClicheTypes = []*NV{
+		{"1 - Заголовок (Клише)", "1"},
+		{"2 - После пользователя", "2"},
+		{"3 - Подвал (Реклама)", "3"},
+		{"4 - Конец чека", "4"},
+	}
+	listAlign = []*NV{
+		{"Слева", "0"}, {"Центр", "1"}, {"Справа", "2"},
+	}
+	listFonts = []*NV{
+		{"Стандартный", "0"}, {"Сжатый (A)", "1"}, {"Мелкий (B)", "2"},
+	}
+	listUnderline = []*NV{
+		{"Нет", "0"}, {"Текст", "1"}, {"Вся строка", "2"},
+	}
 )
 
 // -----------------------------
-// МОДЕЛИ ТАБЛИЦ (Клише)
+// МОДЕЛИ ДАННЫХ КЛИШЕ
 // -----------------------------
 
-type HeaderModel struct {
+// ClicheItem представляет одну строку клише для GUI.
+type ClicheItem struct {
+	Index  int
+	Text   string
+	Format string // Сырой формат "xxxxxx"
+
+	// Поля для редактирования (разбор Format)
+	Invert    bool
+	Width     int
+	Height    int
+	Font      string // "0", "1", "2"
+	Underline string // "0", "1", "2"
+	Align     string // "0", "1", "2"
+}
+
+// ParseFormatString разбирает строку формата "xxxxxx" в поля структуры.
+func (c *ClicheItem) ParseFormatString() {
+	runes := []rune(c.Format)
+	// Добиваем нулями если короткая
+	for len(runes) < 6 {
+		runes = append(runes, '0')
+	}
+
+	c.Invert = (runes[0] == '1')
+	c.Width, _ = strconv.Atoi(string(runes[1]))
+	c.Height, _ = strconv.Atoi(string(runes[2]))
+	c.Font = string(runes[3])
+	c.Underline = string(runes[4])
+	c.Align = string(runes[5])
+}
+
+// UpdateFormatString собирает строку формата "xxxxxx" из полей структуры.
+func (c *ClicheItem) UpdateFormatString() {
+	inv := "0"
+	if c.Invert {
+		inv = "1"
+	}
+
+	// Лимиты размеров 0..8 (хотя протокол позволяет 1-8, 0-дефолт)
+	w := c.Width
+	if w < 0 {
+		w = 0
+	}
+	if w > 8 {
+		w = 8
+	}
+
+	h := c.Height
+	if h < 0 {
+		h = 0
+	}
+	if h > 8 {
+		h = 8
+	}
+
+	c.Format = fmt.Sprintf("%s%d%d%s%s%s",
+		inv, w, h,
+		ensureChar(c.Font),
+		ensureChar(c.Underline),
+		ensureChar(c.Align))
+}
+
+func ensureChar(s string) string {
+	if len(s) == 0 {
+		return "0"
+	}
+	return string(s[0])
+}
+
+// ClicheModel - модель для TableView.
+type ClicheModel struct {
 	walk.TableModelBase
-	items []map[string]interface{}
+	Items []*ClicheItem
 }
 
-func (m *HeaderModel) RowCount() int {
-	return len(m.items)
+func (m *ClicheModel) RowCount() int {
+	return len(m.Items)
 }
 
-func (m *HeaderModel) Value(row, col int) interface{} {
-	return m.items[row]["Text"]
-}
-
-func (m *HeaderModel) SetValue(row, col int, value interface{}) error {
-	m.items[row]["Text"] = value.(string)
-	return nil
-}
-
-type FooterModel struct {
-	walk.TableModelBase
-	items []map[string]interface{}
-}
-
-func (m *FooterModel) RowCount() int {
-	return len(m.items)
-}
-
-func (m *FooterModel) Value(row, col int) interface{} {
-	return m.items[row]["Text"]
-}
-
-func (m *FooterModel) SetValue(row, col int, value interface{}) error {
-	m.items[row]["Text"] = value.(string)
-	return nil
+func (m *ClicheModel) Value(row, col int) interface{} {
+	item := m.Items[row]
+	switch col {
+	case 0:
+		return item.Index + 1 // Номер строки 1..10
+	case 1:
+		return item.Format
+	case 2:
+		return item.Text
+	}
+	return ""
 }
 
 // -----------------------------
-// МОДЕЛЬ ВЬЮ (ViewModel)
+// VIEW MODEL (ГЛАВНАЯ)
 // -----------------------------
 
 type ServiceViewModel struct {
-	// Время
+	// --- Время ---
 	KktTimeStr string
 	PcTimeStr  string
 
@@ -122,55 +195,54 @@ type ServiceViewModel struct {
 	LanGw   string
 
 	// --- Параметры (Оборудование и Опции) ---
-
-	// Принтер
 	PrintModel string // "1", "2"
 	PrintBaud  string // "115200"
 	PrintPaper int    // 57, 80
 	PrintFont  int    // 0, 1
 
-	// Опции (b0..b9) и прочее
-	OptTimezone     string // Строка для маппинга
-	OptCut          bool   // b3
-	OptAutoTest     bool   // b4
-	OptNearEnd      bool   // b6
-	OptTextQR       bool   // b7
-	OptCountInCheck bool   // b8
+	// Опции (b0..b9)
+	OptTimezone     string
+	OptCut          bool
+	OptAutoTest     bool
+	OptNearEnd      bool
+	OptTextQR       bool
+	OptCountInCheck bool
+	OptQRPos        string
+	OptRounding     string
+	OptDrawerTrig   string
 
-	OptQRPos      string // b1
-	OptRounding   string // b2
-	OptDrawerTrig string // b5
-
-	// Денежный ящик (Настройки физики)
+	// Денежный ящик
 	DrawerPin  int
 	DrawerRise int
 	DrawerFall int
 
-	// Клише
-	HeaderLines []map[string]interface{}
-	FooterLines []map[string]interface{}
-
-	HeaderModel *HeaderModel
-	FooterModel *FooterModel
-
-	// Изображения
-	ImgIndex int
-	ImgPath  string
+	// --- Клише (Новая структура) ---
+	SelectedClicheType string        // "1".."4"
+	ClicheItems        []*ClicheItem // 10 строк
+	CurrentClicheLine  *ClicheItem   // Указатель на редактируемую строку
 }
 
-var serviceModel *ServiceViewModel
-var serviceBinder *walk.DataBinder
+var (
+	serviceModel  *ServiceViewModel
+	serviceBinder *walk.DataBinder // Биндинг основной вкладки
 
-// Виджеты для прямого доступа
-var kktTimeLabel *walk.Label
-var pcTimeLabel *walk.Label
+	// Элементы для прямого доступа (Время)
+	kktTimeLabel *walk.Label
+	pcTimeLabel  *walk.Label
 
-// Таймеры
-var pcTicker *time.Ticker
-var kktTicker *time.Ticker
+	// Таймеры
+	pcTicker  *time.Ticker
+	kktTicker *time.Ticker
 
-// Флаг, предотвращающий срабатывание событий при программной загрузке данных
-var isLoadingData bool
+	// Флаг загрузки (блокировка событий)
+	isLoadingData bool
+
+	// --- Элементы редактора Клише ---
+	clicheTable        *walk.TableView
+	clicheModel        *ClicheModel
+	clicheEditorGroup  *walk.GroupBox
+	clicheEditorBinder *walk.DataBinder // Биндинг панели редактирования
+)
 
 // -----------------------------
 // УТИЛИТЫ
@@ -200,28 +272,29 @@ func joinHostPort(host string, port int) string {
 // -----------------------------
 
 func loadServiceInitial() {
-	waitForWindow := func() bool {
+	// Ждем инициализации окна
+	go func() {
 		for i := 0; i < 20; i++ {
 			if mw != nil && mw.Handle() != 0 {
-				return true
+				break
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		return false
-	}
-
-	drv := driver.Active
-	if drv == nil {
-		serviceModel.KktTimeStr = "Нет подключения"
-		serviceModel.PcTimeStr = time.Now().Format("02.01.2006 15:04:05")
-		return
-	}
-
-	// 1. Время
-	go func() {
-		if !waitForWindow() {
+		if mw == nil {
 			return
 		}
+
+		drv := driver.Active
+		if drv == nil {
+			mw.Synchronize(func() {
+				serviceModel.KktTimeStr = "Нет подключения"
+				serviceModel.PcTimeStr = time.Now().Format("02.01.2006 15:04:05")
+				serviceBinder.Reset()
+			})
+			return
+		}
+
+		// 1. Время
 		t, err := drv.GetDateTime()
 		mw.Synchronize(func() {
 			if err == nil {
@@ -231,17 +304,12 @@ func loadServiceInitial() {
 			}
 			serviceBinder.Reset()
 		})
-	}()
 
-	// 2. Остальные настройки
-	go func() {
-		if !waitForWindow() {
-			return
-		}
+		// 2. Остальные настройки
 		mw.Synchronize(func() { isLoadingData = true })
 		readNetworkSettings()
 		readAllParameters()
-		readCliche()
+		// Клише загружается отдельно по кнопке, но можно инициализировать модель пустыми
 		mw.Synchronize(func() { isLoadingData = false })
 	}()
 }
@@ -259,7 +327,7 @@ func readNetworkSettings() {
 	mw.Synchronize(func() {
 		if ofd != nil {
 			serviceModel.OfdString = joinHostPort(ofd.Addr, ofd.Port)
-			serviceModel.OfdClient = ofd.Client // "0" или "1"
+			serviceModel.OfdClient = ofd.Client
 			serviceModel.TimerFN = ofd.TimerFN
 			serviceModel.TimerOFD = ofd.TimerOFD
 		}
@@ -319,37 +387,6 @@ func readAllParameters() {
 			serviceModel.OptCountInCheck = (opts.B8 == 1)
 		}
 
-		serviceBinder.Reset()
-	})
-}
-
-func readCliche() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-
-	h, _ := drv.GetHeader(1)
-	f, _ := drv.GetHeader(3)
-
-	mw.Synchronize(func() {
-		for i := range serviceModel.HeaderLines {
-			if i < len(h) {
-				serviceModel.HeaderLines[i]["Text"] = h[i]
-			} else {
-				serviceModel.HeaderLines[i]["Text"] = ""
-			}
-		}
-		serviceModel.HeaderModel.PublishRowsReset()
-
-		for i := range serviceModel.FooterLines {
-			if i < len(f) {
-				serviceModel.FooterLines[i]["Text"] = f[i]
-			} else {
-				serviceModel.FooterLines[i]["Text"] = ""
-			}
-		}
-		serviceModel.FooterModel.PublishRowsReset()
 		serviceBinder.Reset()
 	})
 }
@@ -426,34 +463,33 @@ func checkTimeDifference(pcTime time.Time) {
 // -----------------------------
 
 func GetServiceTab() d.TabPage {
+	// Инициализация модели
 	serviceModel = &ServiceViewModel{
-		HeaderLines:   make([]map[string]interface{}, 5),
-		FooterLines:   make([]map[string]interface{}, 5),
-		PrintModel:    "1",
-		PrintBaud:     "115200",
-		PrintPaper:    80,
-		PrintFont:     0,
-		DrawerPin:     5,
-		DrawerRise:    100,
-		DrawerFall:    100,
-		OptTimezone:   "3",
-		OptQRPos:      "1",
-		OptRounding:   "0",
-		OptDrawerTrig: "1",
-		OptCut:        true,
-		OfdClient:     "1", // По умолчанию внешний
-		ImgIndex:      0,   // 0 - Логотип
+		PrintModel:         "1",
+		PrintBaud:          "115200",
+		PrintPaper:         80,
+		PrintFont:          0,
+		DrawerPin:          5,
+		DrawerRise:         100,
+		DrawerFall:         100,
+		OptTimezone:        "3",
+		OptQRPos:           "1",
+		OptRounding:        "0",
+		OptDrawerTrig:      "1",
+		OptCut:             true,
+		OfdClient:          "1", // По умолчанию внешний
+		SelectedClicheType: "1",
+		CurrentClicheLine:  &ClicheItem{}, // Заглушка, чтобы binder не падал
 	}
 
-	for i := range serviceModel.HeaderLines {
-		serviceModel.HeaderLines[i] = map[string]interface{}{"Text": ""}
+	// Инициализация строк клише (10 пустых)
+	serviceModel.ClicheItems = make([]*ClicheItem, 10)
+	for i := 0; i < 10; i++ {
+		item := &ClicheItem{Index: i, Format: "000000"}
+		item.ParseFormatString()
+		serviceModel.ClicheItems[i] = item
 	}
-	for i := range serviceModel.FooterLines {
-		serviceModel.FooterLines[i] = map[string]interface{}{"Text": ""}
-	}
-
-	serviceModel.HeaderModel = &HeaderModel{items: serviceModel.HeaderLines}
-	serviceModel.FooterModel = &FooterModel{items: serviceModel.FooterLines}
+	clicheModel = &ClicheModel{Items: serviceModel.ClicheItems}
 
 	loadServiceInitial()
 	startClocks()
@@ -497,9 +533,9 @@ func GetServiceTab() d.TabPage {
 				},
 			},
 
-			// ТАБЫ
+			// ТАБЫ ПОДКАТЕГОРИЙ
 			d.TabWidget{
-				MinSize: d.Size{Height: 320},
+				MinSize: d.Size{Height: 350}, // Увеличим высоту для редактора клише
 				Pages: []d.TabPage{
 
 					// 1. СВЯЗЬ И ОФД
@@ -526,11 +562,13 @@ func GetServiceTab() d.TabPage {
 										Children: []d.Widget{
 											d.Label{Text: "Режим:"},
 											d.ComboBox{
-												Value:         d.Bind("OfdClient"),
-												BindingMember: "Code", DisplayMember: "Name", Model: listClients,
+												Value:                 d.Bind("OfdClient"),
+												BindingMember:         "Code",
+												DisplayMember:         "Name",
+												Model:                 listClients,
 												OnCurrentIndexChanged: checkOfdClientChange,
 											},
-											d.Label{Text: "Имя клиента:"}, d.LineEdit{Text: d.Bind("OfdClient"), ReadOnly: true, ToolTipText: "Задается автоматически режимом"},
+											d.Label{Text: "Имя клиента:"}, d.LineEdit{Text: d.Bind("OfdClient"), ReadOnly: true},
 											d.Label{Text: "Таймер ФН:"}, d.NumberEdit{Value: d.Bind("TimerFN"), MaxSize: d.Size{Width: 50}},
 											d.Label{Text: "Таймер ОФД:"}, d.NumberEdit{Value: d.Bind("TimerOFD"), MaxSize: d.Size{Width: 50}},
 										},
@@ -629,90 +667,129 @@ func GetServiceTab() d.TabPage {
 						},
 					},
 
-					// 3. КЛИШЕ
+					// 3. КЛИШЕ (Master-Detail Редактор)
 					{
 						Title:  "Клише",
-						Layout: d.HBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 5},
+						Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 5},
 						Children: []d.Widget{
+							// Панель выбора
 							d.Composite{
-								Layout:        d.VBox{Spacing: 2},
-								StretchFactor: 1,
+								Layout: d.HBox{MarginsZero: true, Alignment: d.AlignHNearVCenter},
 								Children: []d.Widget{
-									d.Label{Text: "Заголовок:", Font: d.Font{Bold: true}},
-									d.TableView{
-										MinSize: d.Size{Width: 100, Height: 100},
-										Columns: []d.TableViewColumn{{Title: "Текст"}},
-										Model:   serviceModel.HeaderModel,
+									d.Label{Text: "Редактировать:"},
+									d.ComboBox{
+										Value:         d.Bind("SelectedClicheType"),
+										Model:         listClicheTypes,
+										BindingMember: "Code", DisplayMember: "Name",
+										MinSize: d.Size{Width: 200},
 									},
-									d.Composite{Layout: d.HBox{}, Children: []d.Widget{
-										d.PushButton{Text: "Read", OnClicked: func() { onReadHeaderSingle(1) }},
-										d.PushButton{Text: "Write", OnClicked: func() { onWriteHeaderSingle(1) }},
-									}},
+									d.PushButton{Text: "Считать", OnClicked: onReadCliche},
+									d.PushButton{Text: "Записать", OnClicked: onWriteCliche},
 								},
 							},
+
+							// Рабочая область
 							d.Composite{
-								Layout:        d.VBox{Spacing: 2},
-								StretchFactor: 1,
+								Layout: d.HBox{MarginsZero: true, Spacing: 10},
 								Children: []d.Widget{
-									d.Label{Text: "Подвал:", Font: d.Font{Bold: true}},
+									// Таблица (Список строк)
 									d.TableView{
-										MinSize: d.Size{Width: 100, Height: 100},
-										Columns: []d.TableViewColumn{{Title: "Текст"}},
-										Model:   serviceModel.FooterModel,
+										AssignTo:         &clicheTable,
+										Model:            clicheModel,
+										AlternatingRowBG: true,
+										Columns: []d.TableViewColumn{
+											{Title: "#", Width: 30},
+											{Title: "Fmt", Width: 60},
+											{Title: "Текст", Width: 300},
+										},
+										MinSize:               d.Size{Width: 400, Height: 200},
+										OnCurrentIndexChanged: onClicheSelectionChanged,
 									},
-									d.Composite{Layout: d.HBox{}, Children: []d.Widget{
-										d.PushButton{Text: "Read", OnClicked: func() { onReadHeaderSingle(3) }},
-										d.PushButton{Text: "Write", OnClicked: func() { onWriteHeaderSingle(3) }},
-									}},
+
+									// Редактор выбранной строки
+									d.GroupBox{
+										AssignTo: &clicheEditorGroup,
+										Title:    "Настройки строки",
+										Layout:   d.VBox{Margins: d.Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}, Spacing: 8},
+										Enabled:  false, // По умолчанию выключено
+										DataBinder: d.DataBinder{
+											AssignTo:   &clicheEditorBinder,
+											DataSource: serviceModel.CurrentClicheLine,
+											// OnChange удален, так как его не существует в d.DataBinder
+											AutoSubmit: true,
+										},
+										Children: []d.Widget{
+											d.Label{Text: "Текст:"},
+											d.LineEdit{
+												Text:          d.Bind("Text"),
+												OnTextChanged: onClicheItemChanged, // Отслеживаем изменение текста
+											},
+
+											d.Composite{
+												Layout: d.Grid{Columns: 2, Spacing: 10},
+												Children: []d.Widget{
+													d.Label{Text: "Выравнивание:"},
+													d.ComboBox{
+														Value:                 d.Bind("Align"),
+														Model:                 listAlign,
+														BindingMember:         "Code",
+														DisplayMember:         "Name",
+														OnCurrentIndexChanged: onClicheItemChanged, // Отслеживаем выбор
+													},
+
+													d.Label{Text: "Шрифт:"},
+													d.ComboBox{
+														Value:                 d.Bind("Font"),
+														Model:                 listFonts,
+														BindingMember:         "Code",
+														DisplayMember:         "Name",
+														OnCurrentIndexChanged: onClicheItemChanged, // Отслеживаем выбор
+													},
+
+													d.Label{Text: "Подчеркивание:"},
+													d.ComboBox{
+														Value:                 d.Bind("Underline"),
+														Model:                 listUnderline,
+														BindingMember:         "Code",
+														DisplayMember:         "Name",
+														OnCurrentIndexChanged: onClicheItemChanged, // Отслеживаем выбор
+													},
+												},
+											},
+
+											d.GroupBox{
+												Title:  "Масштабирование",
+												Layout: d.Grid{Columns: 4},
+												Children: []d.Widget{
+													d.Label{Text: "Ширина:"},
+													d.NumberEdit{
+														Value:          d.Bind("Width"),
+														MinValue:       0,
+														MaxValue:       8,
+														MaxSize:        d.Size{Width: 40},
+														OnValueChanged: onClicheItemChanged, // Отслеживаем число
+													},
+													d.Label{Text: "Высота:"},
+													d.NumberEdit{
+														Value:          d.Bind("Height"),
+														MinValue:       0,
+														MaxValue:       8,
+														MaxSize:        d.Size{Width: 40},
+														OnValueChanged: onClicheItemChanged, // Отслеживаем число
+													},
+												},
+											},
+											d.CheckBox{
+												Text:                "Инверсия (Белым по черному)",
+												Checked:             d.Bind("Invert"),
+												OnCheckStateChanged: func() { onClicheItemChanged() }, // Отслеживаем галочку
+											},
+										},
+									},
 								},
 							},
 						},
 					},
-					// 4. ГРАФИКА
-					// {
-					// 	Title:  "Графика",
-					// 	Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 10},
-					// 	Children: []d.Widget{
-					// 		d.GroupBox{
-					// 			Title:  "Загрузка изображений (Логотип)",
-					// 			Layout: d.Grid{Columns: 3, Spacing: 10},
-					// 			Children: []d.Widget{
-					// 				d.Label{Text: "Номер (0=Лого):"},
-					// 				d.NumberEdit{
-					// 					Value:    d.Bind("ImgIndex"),
-					// 					MinValue: 0,
-					// 					MaxValue: 20,
-					// 					MaxSize:  d.Size{Width: 50},
-					// 				},
-					// 				d.Label{Text: "Индекс 0 - печатается в заголовке чека."},
-					// 			},
-					// 		},
-					// 		d.GroupBox{
-					// 			Title:  "Файл",
-					// 			Layout: d.VBox{Spacing: 5},
-					// 			Children: []d.Widget{
-					// 				d.Composite{
-					// 					Layout: d.HBox{MarginsZero: true},
-					// 					Children: []d.Widget{
-					// 						d.LineEdit{Text: d.Bind("ImgPath"), ReadOnly: true},
-					// 						d.PushButton{Text: "Выбрать...", OnClicked: onSelectImageFile},
-					// 					},
-					// 				},
-					// 				d.VSpacer{Size: 5},
-					// 				d.PushButton{
-					// 					Text:      "Загрузить в ККТ",
-					// 					OnClicked: onUploadImage,
-					// 					MinSize:   d.Size{Height: 40},
-					// 				},
-					// 			},
-					// 		},
-					// 		d.Label{
-					// 			Text:          "Поддерживаются: JPG, PNG, BMP.\nКартинка будет автоматически преобразована в ч/б BMP\nи уменьшена до ширины печати.",
-					// 			TextAlignment: d.AlignCenter,
-					// 			MinSize:       d.Size{Height: 60},
-					// 		},
-					// 	},
-					// },
 				},
 			},
 		},
@@ -914,25 +991,6 @@ func onTechReset() {
 	}()
 }
 
-// Стандартные функции (не менялись, но нужны для компиляции)
-func onQueryTime() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	go func() {
-		t, err := drv.GetDateTime()
-		mw.Synchronize(func() {
-			if err != nil {
-				walk.MsgBox(mw, "Ошибка", "Ошибка времени: "+err.Error(), walk.MsgBoxIconError)
-			} else {
-				serviceModel.KktTimeStr = t.Format("02.01.2006 15:04:05")
-				serviceBinder.Reset()
-			}
-		})
-	}()
-}
-
 func onSyncTime() {
 	drv := driver.Active
 	if drv == nil {
@@ -990,108 +1048,117 @@ func onReadOfdSettings() {
 func onReadOismSettings() { onReadOfdSettings() }
 func onReadLanSettings()  { onReadOfdSettings() }
 
-func onReadHeaderSingle(mode int) {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	go func() {
-		rows, err := drv.GetHeader(mode)
-		mw.Synchronize(func() {
-			if err != nil {
-				return
-			}
-			target := serviceModel.HeaderLines
-			if mode == 3 {
-				target = serviceModel.FooterLines
-			}
-			for i := range target {
-				if i < len(rows) {
-					target[i]["Text"] = rows[i]
-				} else {
-					target[i]["Text"] = ""
-				}
-			}
-			if mode == 1 {
-				serviceModel.HeaderModel.PublishRowsReset()
-			} else {
-				serviceModel.FooterModel.PublishRowsReset()
-			}
-		})
-	}()
-}
+// -----------------------------
+// ЛОГИКА КЛИШЕ (НОВАЯ)
+// -----------------------------
 
-func onWriteHeaderSingle(mode int) {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	var lines []string
-	src := serviceModel.HeaderLines
-	if mode == 3 {
-		src = serviceModel.FooterLines
-	}
-	for _, m := range src {
-		lines = append(lines, fmt.Sprintf("%v", m["Text"]))
-	}
-
-	go func() {
-		for i, txt := range lines {
-			drv.SetHeaderLine(mode, i, txt, "")
-		}
-		mw.Synchronize(func() { walk.MsgBox(mw, "OK", "Записано", walk.MsgBoxIconInformation) })
-	}()
-}
-
-// Оставлено для попыток реализовать загрузку картинок в логотип
-func onSelectImageFile() {
-	dlg := new(walk.FileDialog)
-	dlg.Title = "Выбор изображения"
-	dlg.Filter = "Изображения (*.png;*.jpg;*.bmp)|*.png;*.jpg;*.bmp|Все файлы (*.*)|*.*"
-
-	if ok, _ := dlg.ShowOpen(mw); ok {
-		serviceModel.ImgPath = dlg.FilePath
-		serviceBinder.Reset()
-	}
-}
-
-func onUploadImage() {
+// onReadCliche читает выбранный тип клише из ККТ
+func onReadCliche() {
 	drv := driver.Active
 	if drv == nil {
 		walk.MsgBox(mw, "Ошибка", "Нет подключения", walk.MsgBoxIconError)
 		return
 	}
-	if serviceModel.ImgPath == "" {
-		walk.MsgBox(mw, "Внимание", "Выберите файл", walk.MsgBoxIconWarning)
-		return
-	}
 
-	// Блокируем интерфейс (опционально можно добавить блокировку)
+	typeID, _ := strconv.Atoi(serviceModel.SelectedClicheType)
 
 	go func() {
-		// 1. Подготовка картинки (макс ширина 384 точки, безопасное значение)
-		// Для F80 может быть 576, но 384 работает везде.
-		bmpData, err := PrepareImageForKKT(serviceModel.ImgPath, 384)
+		lines, err := drv.GetHeader(typeID)
 		if err != nil {
 			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Ошибка конвертации", err.Error(), walk.MsgBoxIconError)
-			})
-			return
-		}
-
-		logMsg("Размер BMP для загрузки: %d байт", len(bmpData))
-
-		// 2. Загрузка
-		if err := drv.UploadImage(serviceModel.ImgIndex, bmpData); err != nil {
-			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Ошибка загрузки", err.Error(), walk.MsgBoxIconError)
+				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка чтения клише: %v", err), walk.MsgBoxIconError)
 			})
 			return
 		}
 
 		mw.Synchronize(func() {
-			walk.MsgBox(mw, "Успех", fmt.Sprintf("Картинка #%d успешно загружена!", serviceModel.ImgIndex), walk.MsgBoxIconInformation)
+			// Заполняем модель
+			for i := 0; i < 10; i++ {
+				if i < len(lines) {
+					serviceModel.ClicheItems[i].Text = lines[i].Text
+					serviceModel.ClicheItems[i].Format = lines[i].Format
+				} else {
+					serviceModel.ClicheItems[i].Text = ""
+					serviceModel.ClicheItems[i].Format = "000000"
+				}
+				// Парсим формат для редактора
+				serviceModel.ClicheItems[i].ParseFormatString()
+			}
+			// Обновляем таблицу
+			clicheModel.PublishRowsReset()
+			// Если что-то выбрано, обновляем редактор
+			idx := clicheTable.CurrentIndex()
+			if idx >= 0 {
+				reloadEditor(idx)
+			}
 		})
-		logMsg("Загрузка картинки #%d завершена.", serviceModel.ImgIndex)
 	}()
+}
+
+// onWriteCliche записывает текущее состояние таблицы в ККТ
+func onWriteCliche() {
+	drv := driver.Active
+	if drv == nil {
+		return
+	}
+
+	typeID, _ := strconv.Atoi(serviceModel.SelectedClicheType)
+
+	// Подготавливаем данные
+	var linesToWrite []struct{ txt, fmt string }
+	for _, item := range serviceModel.ClicheItems {
+		// Убедимся, что формат актуален
+		item.UpdateFormatString()
+		linesToWrite = append(linesToWrite, struct{ txt, fmt string }{item.Text, item.Format})
+	}
+
+	go func() {
+		for i, l := range linesToWrite {
+			// i = номер строки (0..9)
+			// l.fmt уже "xxxxxx"
+			if err := drv.SetHeaderLine(typeID, i, l.txt, l.fmt); err != nil {
+				// Логируем или игнорируем
+				fmt.Printf("Error writing line %d: %v\n", i, err)
+			}
+		}
+		mw.Synchronize(func() {
+			walk.MsgBox(mw, "Успех", "Клише записано", walk.MsgBoxIconInformation)
+		})
+	}()
+}
+
+// onClicheSelectionChanged вызывается при клике на строку таблицы
+func onClicheSelectionChanged() {
+	idx := clicheTable.CurrentIndex()
+	if idx < 0 {
+		clicheEditorGroup.SetEnabled(false)
+		return
+	}
+	reloadEditor(idx)
+}
+
+// reloadEditor перепривязывает редактор к выбранной строке
+func reloadEditor(idx int) {
+	// 1. Берем указатель на реальный объект из списка
+	item := serviceModel.ClicheItems[idx]
+
+	// 2. Подменяем DataSource у биндера редактора
+	// ВАЖНО: Мы меняем источник данных для binder'а на лету
+	clicheEditorBinder.SetDataSource(item)
+	clicheEditorBinder.Reset()
+
+	clicheEditorGroup.SetEnabled(true)
+	clicheEditorGroup.SetTitle(fmt.Sprintf("Настройки строки №%d", idx+1))
+}
+
+// onClicheItemChanged вызывается при любом изменении в полях редактора
+func onClicheItemChanged() {
+	// Принудительно обновляем форматную строку на основе полей
+	idx := clicheTable.CurrentIndex()
+	if idx >= 0 {
+		item := serviceModel.ClicheItems[idx]
+		item.UpdateFormatString()
+		// Уведомляем таблицу, что данные в этой строке изменились
+		clicheModel.PublishRowChanged(idx)
+	}
 }

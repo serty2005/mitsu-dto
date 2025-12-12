@@ -14,7 +14,7 @@ type Driver interface {
 	GetPrinterSettings() (*PrinterSettings, error)
 	GetMoneyDrawerSettings() (*DrawerSettings, error)
 	GetComSettings() (int32, error)
-	GetHeader(int) ([]string, error)
+	GetHeader(int) ([]ClicheLineData, error)
 	GetLanSettings() (*LanSettings, error)
 	GetOfdSettings() (*OfdSettings, error)
 	GetOismSettings() (*ServerSettings, error)

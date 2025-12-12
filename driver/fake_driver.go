@@ -115,12 +115,21 @@ func (d *fakeDriver) GetComSettings() (int32, error) {
 	return 115200, nil
 }
 
-func (d *fakeDriver) GetHeader(n int) ([]string, error) {
-	if n == 1 {
-		return []string{"ООО \"РОМАШКА\"", "ДОБРО ПОЖАЛОВАТЬ", "СПАСИБО ЗА ПОКУПКУ"}, nil
+func (d *fakeDriver) GetHeader(n int) ([]ClicheLineData, error) {
+	// Возвращаем заглушку на 10 строк
+	res := make([]ClicheLineData, 10)
+	for i := 0; i < 10; i++ {
+		res[i] = ClicheLineData{
+			Text:   fmt.Sprintf("Строка %d (Тип %d)", i+1, n),
+			Format: "000000",
+		}
 	}
-	// Footer
-	return []string{"Сайт: www.example.com", "Тел: +7 (999) 000-00-00"}, nil
+	if n == 1 {
+		res[0].Text = "ООО \"РОМАШКА\""
+		res[0].Format = "011001" // Пример: центр, увеличенный
+		res[1].Text = "ДОБРО ПОЖАЛОВАТЬ"
+	}
+	return res, nil
 }
 
 func (d *fakeDriver) GetLanSettings() (*LanSettings, error) {

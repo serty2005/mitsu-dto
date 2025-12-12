@@ -88,15 +88,16 @@ func (d *mitsuDriver) SetMoneyDrawerSettings(s DrawerSettings) error {
 // 6 цифра: выравнивание (0-лево, 1-центр, 2-право)
 // Строки каждого клише надо программировать по одной, подряд без пропуска. Например, если задать строки L0 и L2, то установися только строка L0.
 // Установка каждой строки стирает все последующие внутри клише. Например, если сначала задать строки с L0 по L3, а затем повторно задать строки L0 и L1, то строки L2 и L3 сотрутся
+// Исправлено: используется атрибут FORM вместо F, так как реальное устройство использует FORM.
 func (d *mitsuDriver) SetHeaderLine(headerNum int, lineNum int, text string, format string) error {
 	if format == "" {
 		format = "000000"
 	}
 	safeText := escapeXML(text)
 
-	// Пример: <SET HEADER='1'><L0 F='000011'>Текст</L0></SET>
+	// Пример: <SET HEADER='1'><L0 FORM='000011'>Текст</L0></SET>
 	cmd := fmt.Sprintf(
-		"<SET HEADER='%d'><L%d F='%s'>%s</L%d></SET>",
+		"<SET HEADER='%d'><L%d FORM='%s'>%s</L%d></SET>",
 		headerNum, lineNum, format, safeText, lineNum,
 	)
 	_, err := d.sendCommand(cmd)
