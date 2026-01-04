@@ -35,7 +35,7 @@ func (d *mitsuDriver) SetDateTime(t time.Time) error {
 // Необходимо устанавливать кассира перед открытием каждого чека.
 func (d *mitsuDriver) SetCashier(name string, inn string) error {
 	// Экранируем имя, так как оно может содержать кавычки и т.д.
-	safeName := escapeXML(name)
+	safeName := escapeXMLText(name)
 	cmd := fmt.Sprintf("<SET CASHIER='%s' INN='%s'/>", safeName, inn)
 	_, err := d.sendCommand(cmd)
 	return err
@@ -93,7 +93,7 @@ func (d *mitsuDriver) SetHeaderLine(headerNum int, lineNum int, text string, for
 	if format == "" {
 		format = "000000"
 	}
-	safeText := escapeXML(text)
+	safeText := escapeXMLText(text)
 
 	// Пример: <SET HEADER='1'><L0 FORM='000011'>Текст</L0></SET>
 	cmd := fmt.Sprintf(

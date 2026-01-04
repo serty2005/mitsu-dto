@@ -38,6 +38,10 @@ func (d *mitsuDriver) performRegistration(req RegistrationRequest) error {
 	// Обязательные атрибуты согласно стр. 23
 	attrs := fmt.Sprintf("BASE='%s' T1062='%s'", req.Base, req.TaxSystems)
 
+	if req.TaxSystemBase != "" {
+		attrs += fmt.Sprintf(" T1062_Base='%s'", req.TaxSystemBase)
+	}
+
 	// Добавляем опциональные атрибуты (флаги режимов)
 	if req.InternetCalc {
 		attrs += " T1108='1'"
@@ -103,24 +107,25 @@ func (d *mitsuDriver) performRegistration(req RegistrationRequest) error {
 
 	// Сборка вложенных тегов
 	tags := ""
-	tags += fmt.Sprintf("<T1048>%s</T1048>", escapeXML(req.OrgName))
-	tags += fmt.Sprintf("<T1009>%s</T1009>", escapeXML(req.Address))
-	tags += fmt.Sprintf("<T1187>%s</T1187>", escapeXML(req.Place))
-	tags += fmt.Sprintf("<T1046>%s</T1046>", escapeXML(req.OfdName))
+	tags += fmt.Sprintf("<T1048>%s</T1048>", escapeXMLText(req.OrgName))
+	tags += fmt.Sprintf("<T1009>%s</T1009>", escapeXMLText(req.Address))
+	tags += fmt.Sprintf("<T1187>%s</T1187>", escapeXMLText(req.Place))
+	tags += fmt.Sprintf("<T1046>%s</T1046>", escapeXMLText(req.OfdName))
 	// ИНН ОФД
 	tags += fmt.Sprintf("<T1017>%s</T1017>", req.OfdInn)
 
-	// ИСПРАВЛЕНИЕ: Передаем ИНН и РНМ всегда, даже при перерегистрации.
-	// Ошибка 103 (TAG 1037) указывает на то, что устройство требует эти данные.
-	tags += fmt.Sprintf("<T1018>%s</T1018>", req.Inn)
-	tags += fmt.Sprintf("<T1037>%s</T1037>", req.RNM)
+	// Согласно стр. 24, при перерегистрации ИНН (1018) и РНМ (1037) НЕ передаются.
+	if !req.IsReregistration {
+		tags += fmt.Sprintf("<T1018>%s</T1018>", req.Inn)
+		tags += fmt.Sprintf("<T1037>%s</T1037>", req.RNM)
+	}
 
-	tags += fmt.Sprintf("<T1060>%s</T1060>", escapeXML(req.FnsSite))
-	tags += fmt.Sprintf("<T1117>%s</T1117>", escapeXML(req.SenderEmail))
+	tags += fmt.Sprintf("<T1060>%s</T1060>", escapeXMLText(req.FnsSite))
+	tags += fmt.Sprintf("<T1117>%s</T1117>", escapeXMLText(req.SenderEmail))
 
 	// Номер автомата также дублируется в тегах в примере
 	if req.AutomatNumber != "" {
-		tags += fmt.Sprintf("<T1036>%s</T1036>", escapeXML(req.AutomatNumber))
+		tags += fmt.Sprintf("<T1036>%s</T1036>", escapeXMLText(req.AutomatNumber))
 	}
 
 	// Итоговая команда

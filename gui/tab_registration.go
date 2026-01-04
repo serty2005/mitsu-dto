@@ -2,13 +2,20 @@ package gui
 
 import (
 	"fmt"
+	"html"
 	"mitsuscanner/driver"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/lxn/walk"
 	d "github.com/lxn/walk/declarative"
 )
+
+// hasBit проверяет, установлен ли бит в целом числе
+func hasBit(value int, bit int) bool {
+	return (value & (1 << bit)) != 0
+}
 
 // RegViewModel - модель данных для формы регистрации
 type RegViewModel struct {
@@ -44,12 +51,13 @@ type RegViewModel struct {
 	ModeVending    bool
 
 	// SNO (Taxation)
-	TaxOSN   bool // 0
-	TaxUSN   bool // 1
-	TaxUSN_M bool // 2
-	TaxENVD  bool // 3
-	TaxESHN  bool // 4
-	TaxPat   bool // 5
+	TaxOSN        bool // 0
+	TaxUSN        bool // 1
+	TaxUSN_M      bool // 2
+	TaxENVD       bool // 3
+	TaxESHN       bool // 4
+	TaxPat        bool // 5
+	TaxSystemBase string
 }
 
 var regModel *RegViewModel
@@ -75,12 +83,12 @@ func GetRegistrationTab() d.TabPage {
 
 			// Основной контент
 			d.Composite{
-				Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 2}, Spacing: 5},
+				Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 2}, Spacing: 3},
 				Children: []d.Widget{
 					d.Composite{
 						// Используем HBox для расположения блоков по горизонтали
 						// Alignment: AlignTop прижмет маленький блок к верху
-						Layout: d.HBox{Margins: d.Margins{Left: 8, Top: 2, Right: 8, Bottom: 2}, Spacing: 5, Alignment: d.Alignment2D(d.AlignDefault)},
+						Layout: d.HBox{Margins: d.Margins{Left: 8, Top: 2, Right: 8, Bottom: 2}, Spacing: 3, Alignment: d.Alignment2D(d.AlignDefault)},
 						Children: []d.Widget{
 							d.GroupBox{
 								Title: "Реквизиты организации",
@@ -105,7 +113,7 @@ func GetRegistrationTab() d.TabPage {
 							d.GroupBox{
 								Title: "Системы налогообложения",
 								// StretchFactor: 1 означает, что этот блок будет занимать ~25% ширины (1 часть)
-								StretchFactor: 1,
+								// StretchFactor: 1,
 								// MinSize можно задать, чтобы чекбоксы не сплющивались, если окно сузят
 								MinSize: d.Size{Width: 150},
 								Layout:  d.VBox{Margins: d.Margins{Left: 3, Top: 1, Right: 3, Bottom: 1}, Spacing: 1},
@@ -115,12 +123,26 @@ func GetRegistrationTab() d.TabPage {
 									d.CheckBox{Text: "УСН доход - расход", Checked: d.Bind("TaxUSN_M"), Alignment: d.Alignment2D(d.AlignNear)},
 									d.CheckBox{Text: "ЕСХН", Checked: d.Bind("TaxESHN"), Alignment: d.Alignment2D(d.AlignNear)},
 									d.CheckBox{Text: "Патент", Checked: d.Bind("TaxPat"), Alignment: d.Alignment2D(d.AlignNear)},
+									d.Label{Text: "СНО по умолчанию:", Font: d.Font{PointSize: 7}},
+									d.ComboBox{
+										Value:         d.Bind("TaxSystemBase"),
+										BindingMember: "Code",
+										DisplayMember: "Name",
+										Model: []*NV{
+											{Name: "ОСН", Code: "0"},
+											{Name: "УСН доход", Code: "1"},
+											{Name: "УСН доход - расход", Code: "2"},
+											{Name: "ЕСХН", Code: "4"},
+											{Name: "Патент", Code: "5"},
+										},
+									},
 								},
 							},
 						},
 					},
 					d.GroupBox{
-						Title:  "Фискальные признаки",
+						Title: "Фискальные признаки",
+
 						Layout: d.Grid{Columns: 4, Margins: d.Margins{Left: 3, Top: 1, Right: 3, Bottom: 1}, Spacing: 1},
 						Children: []d.Widget{
 							d.CheckBox{Text: "Автономный режим", Checked: d.Bind("ModeAutonomous")},
@@ -255,21 +277,13 @@ func onReadRegistration() {
 	}
 
 	go func() {
-		logMsg("=== НАЧАЛО ЧТЕНИЯ РЕГИСТРАЦИОННЫХ ДАННЫХ ===")
 		regData, err := drv.GetRegistrationData()
 		if err != nil {
-			logMsg("ОШИБКА получения данных: %v", err)
 			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 			return
 		}
 
-		logMsg("=== ДАННЫЕ ПОЛУЧЕНЫ ОТ ДРАЙВЕРА ===")
-		logMsg("RNM: '%s'", regData.RNM)
-		logMsg("INN: '%s'", regData.Inn)
-		logMsg("OrgName: '%s'", regData.OrgName)
-
 		mw.Synchronize(func() {
-			logMsg("=== НАЧАЛО ЗАПОЛНЕНИЯ ПОЛЕЙ В GUI ===")
 
 			regModel.RNM = regData.RNM
 			regModel.INN = regData.Inn
@@ -279,24 +293,30 @@ func onReadRegistration() {
 			regModel.Email = regData.EmailSender
 			regModel.Site = regData.Site
 			regModel.OFDINN = regData.OfdInn
-			regModel.OFDName = regData.OfdName
+			regModel.OFDName = html.UnescapeString(regData.OfdName)
 
-			// Парсинг флагов из RegData
-			regModel.ModeMarking = (regData.MarkAttr == "1")
-			regModel.ModeExcise = (regData.ExciseAttr == "1")
-			regModel.ModeInternet = (regData.InternetAttr == "1")
-			regModel.ModeService = (regData.ServiceAttr == "1")
-			regModel.ModeBSO = (regData.BsoAttr == "1")
-			regModel.ModeLottery = (regData.LotteryAttr == "1")
-			regModel.ModeGambling = (regData.GamblingAttr == "1")
-			regModel.ModePawn = (regData.PawnAttr == "1")
-			regModel.ModeInsurance = (regData.InsAttr == "1")
-			regModel.ModeCatering = (regData.DineAttr == "1")
-			regModel.ModeWholesale = (regData.OptAttr == "1")
-			regModel.ModeVending = (regData.VendAttr == "1")
-			regModel.ModeAutomat = (regData.PrintAutoAttr == "1" || regData.AutoModeAttr == "1")
-			regModel.ModeAutonomous = (regData.AutonomAttr == "1")
-			regModel.ModeEncryption = (regData.EncryptAttr == "1")
+			// --- Парсинг атрибутов режимов работы ---
+
+			// Парсинг MODE и ExtMODE с использованием hasBit
+			modeInt, _ := strconv.Atoi(regData.Mode)
+			extModeInt, _ := strconv.Atoi(regData.ExtMode)
+
+			regModel.ModeEncryption = hasBit(modeInt, 0) // Шифрование
+			regModel.ModeAutonomous = hasBit(modeInt, 1) // Автономный режим
+			regModel.ModeService = hasBit(modeInt, 3)    // Услуги
+			regModel.ModeBSO = hasBit(modeInt, 4)        // БСО
+			regModel.ModeInternet = hasBit(modeInt, 5)   // Интернет
+			regModel.ModeCatering = hasBit(modeInt, 6)   // Общепит
+			regModel.ModeWholesale = hasBit(modeInt, 7)  // Опт
+
+			regModel.ModeExcise = hasBit(extModeInt, 0)    // Подакцизные
+			regModel.ModeGambling = hasBit(extModeInt, 1)  // Азартные
+			regModel.ModeLottery = hasBit(extModeInt, 2)   // Лотереи
+			regModel.ModeAutomat = hasBit(extModeInt, 3)   // Принтер в автомате
+			regModel.ModeMarking = hasBit(extModeInt, 4)   // Маркированные товары
+			regModel.ModePawn = hasBit(extModeInt, 5)      // Ломбард
+			regModel.ModeInsurance = hasBit(extModeInt, 6) // Страхование
+			regModel.ModeVending = hasBit(extModeInt, 7)   // Вендинг
 
 			// Парсинг СНО
 			regModel.TaxOSN = false
@@ -325,11 +345,26 @@ func onReadRegistration() {
 				}
 			}
 
+			// Установка TaxSystemBase на первую зарегистрированную СНО по умолчанию
+			if regModel.TaxOSN {
+				regModel.TaxSystemBase = "0"
+			} else if regModel.TaxUSN {
+				regModel.TaxSystemBase = "1"
+			} else if regModel.TaxUSN_M {
+				regModel.TaxSystemBase = "2"
+			} else if regModel.TaxESHN {
+				regModel.TaxSystemBase = "4"
+			} else if regModel.TaxPat {
+				regModel.TaxSystemBase = "5"
+			}
+
+			// Если есть базовая СНО, установить её
+			if regData.TaxBase != "" {
+				regModel.TaxSystemBase = regData.TaxBase
+			}
+
 			if err := regBinder.Reset(); err != nil {
-				logMsg("ОШИБКА обновления биндинга при загрузке данных: %v", err)
 				walk.MsgBox(mw, "Ошибка биндинга", fmt.Sprintf("Ошибка обновления UI: %v", err), walk.MsgBoxIconError)
-			} else {
-				logMsg("Данные успешно загружены в форму.")
 			}
 		})
 	}()
@@ -344,16 +379,30 @@ func onRegister() {
 		return
 	}
 
-	if len(regModel.INN) != 10 && len(regModel.INN) != 12 {
-		walk.MsgBox(mw, "Ошибка", "Некорректная длина ИНН", walk.MsgBoxIconError)
+	if !regexp.MustCompile(`^\d+$`).MatchString(regModel.INN) || (len(regModel.INN) != 10 && len(regModel.INN) != 12) {
+		walk.MsgBox(mw, "Ошибка", "ИНН должен состоять только из цифр и иметь длину 10 или 12 символов.", walk.MsgBoxIconError)
 		return
 	}
 
-	req := fillRequestFromModel()
+	if strings.TrimSpace(regModel.OrgName) == "" {
+		walk.MsgBox(mw, "Ошибка", "Поле 'Наименование' обязательно для заполнения.", walk.MsgBoxIconError)
+		return
+	}
+
+	if strings.TrimSpace(regModel.Address) == "" {
+		walk.MsgBox(mw, "Ошибка", "Поле 'Адрес расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
+		return
+	}
+
+	if strings.TrimSpace(regModel.Place) == "" {
+		walk.MsgBox(mw, "Ошибка", "Поле 'Место расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
+		return
+	}
+
+	req := fillRequestFromModel(false)
 
 	go func() {
 		if err := drv.SetCashier("Администратор", ""); err != nil {
-			logMsg("Ошибка установки кассира: %v", err)
 			return
 		}
 		if err := drv.Register(req); err != nil {
@@ -362,7 +411,8 @@ func onRegister() {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Успех", "ККТ успешно зарегистрирована!", walk.MsgBoxIconInformation)
 			})
-			logMsg("Регистрация выполнена успешно.")
+			if err := drv.PrintLastDocument(); err != nil {
+			}
 		}
 	}()
 }
@@ -392,11 +442,30 @@ func onReregister() {
 		reasons = append(reasons, code)
 	}
 
-	req := fillRequestFromModel()
+	if !regexp.MustCompile(`^\d+$`).MatchString(regModel.INN) || (len(regModel.INN) != 10 && len(regModel.INN) != 12) {
+		walk.MsgBox(mw, "Ошибка", "ИНН должен состоять только из цифр и иметь длину 10 или 12 символов.", walk.MsgBoxIconError)
+		return
+	}
+
+	if strings.TrimSpace(regModel.OrgName) == "" {
+		walk.MsgBox(mw, "Ошибка", "Поле 'Наименование' обязательно для заполнения.", walk.MsgBoxIconError)
+		return
+	}
+
+	if strings.TrimSpace(regModel.Address) == "" {
+		walk.MsgBox(mw, "Ошибка", "Поле 'Адрес расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
+		return
+	}
+
+	if strings.TrimSpace(regModel.Place) == "" {
+		walk.MsgBox(mw, "Ошибка", "Поле 'Место расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
+		return
+	}
+
+	req := fillRequestFromModel(true)
 
 	go func() {
 		if err := drv.SetCashier("Администратор", ""); err != nil {
-			logMsg("Ошибка установки кассира: %v", err)
 			return
 		}
 		if err := drv.Reregister(req, reasons); err != nil {
@@ -407,6 +476,8 @@ func onReregister() {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Успех", "ККТ перерегистрирована!", walk.MsgBoxIconInformation)
 			})
+			if err := drv.PrintLastDocument(); err != nil {
+			}
 		}
 	}()
 }
@@ -434,12 +505,11 @@ func onReplaceFn() {
 		return
 	}
 
-	req := fillRequestFromModel()
+	req := fillRequestFromModel(false)
 	reasons := []int{1}
 
 	go func() {
 		if err := drv.SetCashier("Администратор", ""); err != nil {
-			logMsg("Ошибка установки кассира: %v", err)
 			return
 		}
 		if err := drv.Reregister(req, reasons); err != nil {
@@ -473,33 +543,34 @@ func onCloseFn() {
 	}()
 }
 
-func fillRequestFromModel() driver.RegistrationRequest {
+func fillRequestFromModel(isRereg bool) driver.RegistrationRequest {
 	req := driver.RegistrationRequest{
-		RNM:            regModel.RNM,
-		Inn:            regModel.INN,
-		OrgName:        regModel.OrgName,
-		Address:        regModel.Address,
-		Place:          regModel.Place,
-		SenderEmail:    regModel.Email,
-		FnsSite:        regModel.Site,
-		FfdVer:         regModel.FFD,
-		OfdName:        regModel.OFDName,
-		OfdInn:         regModel.OFDINN,
-		AutonomousMode: regModel.ModeAutonomous,
-		Encryption:     regModel.ModeEncryption,
-		Service:        regModel.ModeService,
-		InternetCalc:   regModel.ModeInternet,
-		BSO:            regModel.ModeBSO,
-		Gambling:       regModel.ModeGambling,
-		Lottery:        regModel.ModeLottery,
-		Excise:         regModel.ModeExcise,
-		Marking:        regModel.ModeMarking,
-		PawnShop:       regModel.ModePawn,
-		Insurance:      regModel.ModeInsurance,
-		Catering:       regModel.ModeCatering,
-		Wholesale:      regModel.ModeWholesale,
-		Vending:        regModel.ModeVending,
-		PrinterAutomat: regModel.ModeAutomat,
+		IsReregistration: isRereg,
+		RNM:              regModel.RNM,
+		Inn:              regModel.INN,
+		OrgName:          regModel.OrgName,
+		Address:          regModel.Address,
+		Place:            regModel.Place,
+		SenderEmail:      regModel.Email,
+		FnsSite:          regModel.Site,
+		FfdVer:           regModel.FFD,
+		OfdName:          regModel.OFDName,
+		OfdInn:           regModel.OFDINN,
+		AutonomousMode:   regModel.ModeAutonomous,
+		Encryption:       regModel.ModeEncryption,
+		Service:          regModel.ModeService,
+		InternetCalc:     regModel.ModeInternet,
+		BSO:              regModel.ModeBSO,
+		Gambling:         regModel.ModeGambling,
+		Lottery:          regModel.ModeLottery,
+		Excise:           regModel.ModeExcise,
+		Marking:          regModel.ModeMarking,
+		PawnShop:         regModel.ModePawn,
+		Insurance:        regModel.ModeInsurance,
+		Catering:         regModel.ModeCatering,
+		Wholesale:        regModel.ModeWholesale,
+		Vending:          regModel.ModeVending,
+		PrinterAutomat:   regModel.ModeAutomat,
 	}
 
 	var taxCodes []string
@@ -636,15 +707,6 @@ func calculateRNM(orderNum, inn, serial string) (string, error) {
 
 	// 4. Итоговый РНМ
 	finalRnm := paddedOrder + paddedCrc
-
-	// Логирование для отладки
-	logMsg("Calc RNM Info:")
-	logMsg("  Order: %s -> %s", orderNum, paddedOrder)
-	logMsg("  INN:   %s -> %s", inn, paddedInn)
-	logMsg("  Ser:   %s -> %s", serial, paddedSerial)
-	logMsg("  String: %s", calcString)
-	logMsg("  CRC Hex: %X, Dec: %d", crc, crc)
-	logMsg("  Result: %s", finalRnm)
 
 	return finalRnm, nil
 }

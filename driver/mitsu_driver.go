@@ -114,10 +114,15 @@ func (d *mitsuDriver) disconnectLocked() error {
 	return nil
 }
 
-func escapeXML(s string) string {
-	var buf bytes.Buffer
-	xml.EscapeText(&buf, []byte(s))
-	return buf.String()
+// escapeXMLText экранирует только спецсимволы XML, сохраняя кавычки.
+// Это исправляет проблему, когда кавычки в названии ОФД превращались в &#34;
+func escapeXMLText(s string) string {
+	r := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+	)
+	return r.Replace(s)
 }
 
 // sendCommand отправляет команду.

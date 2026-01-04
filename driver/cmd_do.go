@@ -83,7 +83,7 @@ func (d *mitsuDriver) AddPosition(pos ItemPosition) error {
 	}
 
 	total := pos.Price * pos.Quantity
-	safeName := escapeXML(pos.Name)
+	safeName := escapeXMLText(pos.Name)
 
 	cmd := fmt.Sprintf("<ADD ITEM='%.3f' TAX='%d' UNIT='0' PRICE='%.2f' TOTAL='%.2f' TYPE='1' MODE='4'><NAME>%s</NAME></ADD>",
 		pos.Quantity, tax, pos.Price, total, safeName)

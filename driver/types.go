@@ -92,6 +92,11 @@ type RegData struct {
 	RegNumber  string `xml:"REG,attr"`   // Порядковый номер регистрации
 	Base       string `xml:"BASE,attr"`  // Коды причин регистрации
 	TaxSystems string `xml:"T1062,attr"` // СНО (0,1,...)
+	TaxBase    string `xml:"T1062_Base,attr"`
+
+	// Маски режимов
+	Mode    string `xml:"MODE,attr"`
+	ExtMode string `xml:"ExtMODE,attr"`
 
 	// Флаги (атрибуты)
 	MarkAttr      string `xml:"MARK,attr"`  // Маркировка
@@ -117,7 +122,7 @@ type RegData struct {
 	Address     string `xml:"T1009"`
 	Place       string `xml:"T1187"`
 	OfdName     string `xml:"T1046"`
-	OfdInn      string `xml:"T1017"`
+	OfdInn      string `xml:"T1017,attr"`
 	Site        string `xml:"T1060"`
 	EmailSender string `xml:"T1117"`
 	// T1036 может быть и тегом
