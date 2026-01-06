@@ -29,6 +29,8 @@ type Driver interface {
 	GetTimezone() (int, error)
 	GetPowerStatus() (int, error)
 	GetOptions() (*DeviceOptions, error)
+	GetCurrentDocumentType() (int, error)
+	GetDocumentXMLFromFN(fd int) (string, error)
 
 	SetPowerFlag(value int) error
 	SetDateTime(t time.Time) error
@@ -44,9 +46,9 @@ type Driver interface {
 	SetOption(optionNum int, value int) error
 	SetTimezone(value int) error
 
-	Register(req RegistrationRequest) error
-	Reregister(req RegistrationRequest, reasons []int) error
-	CloseFiscalArchive() error
+	Register(req RegistrationRequest) (*RegResponse, error)
+	Reregister(req RegistrationRequest, reasons []int) (*RegResponse, error)
+	CloseFiscalArchive() (*CloseFnResult, error)
 
 	OpenShift(operator string) error
 	CloseShift(operator string) error

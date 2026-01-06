@@ -298,8 +298,8 @@ func onReadRegistration() {
 			// --- Парсинг атрибутов режимов работы ---
 
 			// Парсинг MODE и ExtMODE с использованием hasBit
-			modeInt, _ := strconv.Atoi(regData.Mode)
-			extModeInt, _ := strconv.Atoi(regData.ExtMode)
+			modeInt := int(regData.ModeMask)
+			extModeInt := int(regData.ExtModeMask)
 
 			regModel.ModeEncryption = hasBit(modeInt, 0) // Шифрование
 			regModel.ModeAutonomous = hasBit(modeInt, 1) // Автономный режим
@@ -405,14 +405,32 @@ func onRegister() {
 		if err := drv.SetCashier("Администратор", ""); err != nil {
 			return
 		}
-		if err := drv.Register(req); err != nil {
+		resp, err := drv.Register(req)
+		if err != nil {
 			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка регистрации", err.Error(), walk.MsgBoxIconError) })
-		} else {
-			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Успех", "ККТ успешно зарегистрирована!", walk.MsgBoxIconInformation)
-			})
-			if err := drv.PrintLastDocument(); err != nil {
-			}
+			return
+		}
+		if err := drv.PrintLastDocument(); err != nil {
+		}
+		typeCode, err := drv.GetCurrentDocumentType()
+		if err != nil {
+			// log.Printf("[DRIVER] Ошибка получения типа документа: %v", err)
+		}
+		meta := driver.GetReportMeta(typeCode)
+		regData, err := drv.GetRegistrationData()
+		if err != nil {
+			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
+			return
+		}
+		if resp.FdNumber != "" {
+			regData.FdNumber = resp.FdNumber
+		}
+		if resp.FpNumber != "" {
+			regData.FpNumber = resp.FpNumber
+		}
+		meta.Data = regData
+		if meta.Kind == driver.ReportReg || meta.Kind == driver.ReportRereg {
+			mw.Synchronize(func() { RunReportModal(mw, meta) })
 		}
 	}()
 }
@@ -468,28 +486,39 @@ func onReregister() {
 		if err := drv.SetCashier("Администратор", ""); err != nil {
 			return
 		}
-		if err := drv.Reregister(req, reasons); err != nil {
+		_, err := drv.Reregister(req, reasons)
+		if err != nil {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Ошибка перерегистрации", err.Error(), walk.MsgBoxIconError)
 			})
-		} else {
-			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Успех", "ККТ перерегистрирована!", walk.MsgBoxIconInformation)
-			})
-			if err := drv.PrintLastDocument(); err != nil {
-			}
+			return
+		}
+		if err := drv.PrintLastDocument(); err != nil {
+		}
+		typeCode, err := drv.GetCurrentDocumentType()
+		if err != nil {
+			// log.Printf("[DRIVER] Ошибка получения типа документа: %v", err)
+		}
+		meta := driver.GetReportMeta(typeCode)
+		regData, err := drv.GetRegistrationData()
+		if err != nil {
+			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
+			return
+		}
+		meta.Data = regData
+		if meta.Kind == driver.ReportReg || meta.Kind == driver.ReportRereg {
+			mw.Synchronize(func() { RunReportModal(mw, meta) })
 		}
 	}()
 }
 
 func onSelectReasons() {
-	// 1. Передаем текущее значение внутрь
+	if err := regBinder.Submit(); err != nil {
+		return
+	}
 	reasons, ok := RunReasonDialog(mw, regModel.Reasons)
 	if ok {
-		// 2. Обновляем модель
 		regModel.Reasons = reasons
-
-		// 3. Принудительно обновляем UI через Binder
 		if err := regBinder.Reset(); err != nil {
 			fmt.Println("Binder reset error:", err)
 		}
@@ -512,13 +541,14 @@ func onReplaceFn() {
 		if err := drv.SetCashier("Администратор", ""); err != nil {
 			return
 		}
-		if err := drv.Reregister(req, reasons); err != nil {
+		resp, err := drv.Reregister(req, reasons)
+		if err != nil {
 			mw.Synchronize(func() {
 				walk.MsgBox(mw, "Ошибка замены ФН", err.Error(), walk.MsgBoxIconError)
 			})
 		} else {
 			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Успех", "ФН заменен!", walk.MsgBoxIconInformation)
+				walk.MsgBox(mw, "Успех", fmt.Sprintf("ФН заменен!\nФД: %s\nФП: %s", resp.FdNumber, resp.FpNumber), walk.MsgBoxIconInformation)
 			})
 		}
 	}()
@@ -533,13 +563,46 @@ func onCloseFn() {
 		return
 	}
 	go func() {
-		if err := drv.CloseFiscalArchive(); err != nil {
+		result, err := drv.CloseFiscalArchive()
+		if err != nil {
 			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
-		} else {
-			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Успех", "Фискальный архив закрыт.", walk.MsgBoxIconInformation)
-			})
+			return
 		}
+		// Получить XML документа и извлечь дату-время
+		dateTimeStr := "—"
+		xml, err := drv.GetDocumentXMLFromFN(result.FD)
+		if err != nil {
+			fmt.Printf("[GUI] Ошибка получения XML документа FD=%s: %v\n", result.FD, err)
+		} else {
+			dateTimeStr, err = driver.ExtractDocDateTime(xml)
+			if err != nil {
+				fmt.Printf("[GUI] Ошибка извлечения даты из XML FD=%s: %v\n", result.FD, err)
+				dateTimeStr = "—"
+			}
+		}
+		// НЕ вызывать PrintLastDocument, уже внутри
+		typeCode, err := drv.GetCurrentDocumentType()
+		if err != nil {
+			// log.Printf("[DRIVER] Ошибка получения типа документа: %v", err)
+		}
+		meta := driver.GetReportMeta(typeCode)
+		regData, err := drv.GetRegistrationData()
+		if err != nil {
+			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
+			return
+		}
+		fnData := &driver.ReportFnCloseData{
+			FD:        result.FD,
+			FP:        result.FP,
+			DateTime:  dateTimeStr,
+			RNM:       regData.RNM,
+			FNNumber:  regData.FnSerial,
+			KKTNumber: regData.PrinterSerial,
+			Address:   regData.Address,
+			Place:     regData.Place,
+		}
+		meta.Data = fnData
+		mw.Synchronize(func() { RunReportModal(mw, meta) })
 	}()
 }
 

@@ -172,13 +172,17 @@ func (d *fakeDriver) GetTaxRates() (*TaxRates, error) {
 
 func (d *fakeDriver) GetRegistrationData() (*RegData, error) {
 	return &RegData{
-		RNM:        "1234567890123456",
-		Inn:        "7701010101",
-		OrgName:    "MOCK ORG",
-		Address:    "MOCK ADDRESS",
-		OfdName:    "MOCK OFD",
-		MarkAttr:   "1",
-		TaxSystems: "1,2", // УСН
+		RNM:         "1234567890123456",
+		Inn:         "7701010101",
+		OrgName:     "MOCK ORG",
+		Address:     "MOCK ADDRESS",
+		OfdName:     "MOCK OFD",
+		RegDate:     "2023-01-01",
+		RegTime:     "12:34",
+		MarkAttr:    "1",
+		TaxSystems:  "1,2", // УСН
+		ModeMask:    1,
+		ExtModeMask: 2,
 	}, nil
 }
 
@@ -209,9 +213,24 @@ func (d *fakeDriver) SetTimezone(value int) error                   { return nil
 
 // --- OPERATIONS ---
 
-func (d *fakeDriver) Register(req RegistrationRequest) error                  { return nil }
-func (d *fakeDriver) Reregister(req RegistrationRequest, reasons []int) error { return nil }
-func (d *fakeDriver) CloseFiscalArchive() error                               { return nil }
+func (d *fakeDriver) Register(req RegistrationRequest) (*RegResponse, error) {
+	return &RegResponse{
+		FdNumber: "123456",
+		FpNumber: "ABCDEF1234567890",
+	}, nil
+}
+func (d *fakeDriver) Reregister(req RegistrationRequest, reasons []int) (*RegResponse, error) {
+	return &RegResponse{
+		FdNumber: "123457",
+		FpNumber: "ABCDEF1234567891",
+	}, nil
+}
+func (d *fakeDriver) CloseFiscalArchive() (*CloseFnResult, error) {
+	return &CloseFnResult{
+		FD: 12345,
+		FP: "fake_fp",
+	}, nil
+}
 
 func (d *fakeDriver) OpenShift(operator string) error                        { return nil }
 func (d *fakeDriver) CloseShift(operator string) error                       { return nil }
@@ -233,6 +252,14 @@ func (d *fakeDriver) PrintLastDocument() error                               { r
 func (d *fakeDriver) TechReset() error {
 	fmt.Println("[MOCK] Tech Reset performed")
 	return nil
+}
+
+func (d *fakeDriver) GetCurrentDocumentType() (int, error) {
+	return 1, nil
+}
+
+func (d *fakeDriver) GetDocumentXMLFromFN(fd int) (string, error) {
+	return "<DocXML FORM=\"2\"><T1012>01-05-23T01:35</T1012></DocXML>", nil
 }
 
 func (d *fakeDriver) UploadImage(index int, data []byte) error {

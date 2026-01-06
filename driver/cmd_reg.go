@@ -9,7 +9,7 @@ import (
 // Поля соответствуют атрибутам и тегам команды <REG> (стр. 23 документации).
 
 // Register выполняет первичную регистрацию ККТ (5.1).
-func (d *mitsuDriver) Register(req RegistrationRequest) error {
+func (d *mitsuDriver) Register(req RegistrationRequest) (*RegResponse, error) {
 	req.IsReregistration = false
 	req.Base = "0" // Для первичной регистрации BASE всегда '0'
 	return d.performRegistration(req)
@@ -17,7 +17,7 @@ func (d *mitsuDriver) Register(req RegistrationRequest) error {
 
 // Reregister выполняет перерегистрацию ККТ (5.2).
 // reasons - список кодов причин (см. стр 12, например: 1 - замена ФН, 3 - смена реквизитов).
-func (d *mitsuDriver) Reregister(req RegistrationRequest, reasons []int) error {
+func (d *mitsuDriver) Reregister(req RegistrationRequest, reasons []int) (*RegResponse, error) {
 	req.IsReregistration = true
 	// Формируем строку BASE="1,3,..."
 	var strReasons []string
@@ -26,14 +26,14 @@ func (d *mitsuDriver) Reregister(req RegistrationRequest, reasons []int) error {
 	}
 	req.Base = strings.Join(strReasons, ",")
 	if req.Base == "" {
-		return fmt.Errorf("не указаны причины перерегистрации")
+		return nil, fmt.Errorf("не указаны причины перерегистрации")
 	}
 
 	return d.performRegistration(req)
 }
 
 // performRegistration формирует XML команду <REG> и отправляет её.
-func (d *mitsuDriver) performRegistration(req RegistrationRequest) error {
+func (d *mitsuDriver) performRegistration(req RegistrationRequest) (*RegResponse, error) {
 	// Сборка атрибутов
 	// Обязательные атрибуты согласно стр. 23
 	attrs := fmt.Sprintf("BASE='%s' T1062='%s'", req.Base, req.TaxSystems)
@@ -131,15 +131,44 @@ func (d *mitsuDriver) performRegistration(req RegistrationRequest) error {
 	// Итоговая команда
 	xmlCmd := fmt.Sprintf("<REG %s>%s</REG>", attrs, tags)
 
-	_, err := d.sendCommand(xmlCmd)
-	return err
+	respData, err := d.sendCommand(xmlCmd)
+	if err != nil {
+		return nil, err
+	}
+
+	// Парсинг ответа <OK FD='...' FP='...' />
+	var resp RegResponse
+	if err := decodeXML(respData, &resp); err != nil {
+		return nil, fmt.Errorf("ошибка парсинга ответа регистрации: %w", err)
+	}
+
+	return &resp, nil
 }
 
 // CloseFiscalArchive закрывает фискальный режим (5.4).
-func (d *mitsuDriver) CloseFiscalArchive() error {
+func (d *mitsuDriver) CloseFiscalArchive() (*CloseFnResult, error) {
 	// Для закрытия ФН нужно отправить MAKE FISCAL='CLOSE'
-	// И передать данные для отчета о закрытии (адрес, место, ОЗФН)
-	cmd := "<MAKE FISCAL='CLOSE'/>"
-	_, err := d.sendCommand(cmd)
-	return err
+	// Для P0 отправляем без тегов (пустые)
+	cmd := "<MAKE FISCAL='CLOSE'></MAKE>"
+	respData, err := d.sendCommand(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	// Парсинг ответа MAKE: FD и FP
+	var resp struct {
+		FD int    `xml:"FD,attr"`
+		FP string `xml:"FP,attr"`
+	}
+	if err := decodeXML(respData, &resp); err != nil {
+		return nil, fmt.Errorf("ошибка парсинга ответа закрытия ФН: %w", err)
+	}
+
+	// Отправить <PRINT/>
+	_, err = d.sendCommand("<PRINT/>")
+	if err != nil {
+		return nil, fmt.Errorf("ошибка печати отчета о закрытии ФН: %w", err)
+	}
+
+	return &CloseFnResult{FD: resp.FD, FP: resp.FP}, nil
 }

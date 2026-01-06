@@ -3,6 +3,7 @@ package driver
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -415,6 +416,94 @@ func toUTF8(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	return io.ReadAll(r)
+}
+
+// GetCurrentDocumentType получает тип текущего документа.
+func (d *mitsuDriver) GetCurrentDocumentType() (int, error) {
+	resp, err := d.sendCommand("<GET DOC='0'/>")
+	if err != nil {
+		return 0, err
+	}
+	var r struct {
+		Type int `xml:"TYPE,attr"`
+	}
+	if err := decodeXML(resp, &r); err != nil {
+		return 0, err
+	}
+	return r.Type, nil
+}
+
+// GetDocumentXMLFromFN получает полную XML-строку документа из ФН по номеру FD.
+func (d *mitsuDriver) GetDocumentXMLFromFN(fd int) (string, error) {
+	// 1. Получить OFFSET и LENGTH
+	resp, err := d.sendCommand(fmt.Sprintf("<GET DOC='X:%d'/>", fd))
+	if err != nil {
+		return "", err
+	}
+	var docInfo struct {
+		Offset string `xml:"OFFSET,attr"`
+		Length int    `xml:"LENGTH,attr"`
+	}
+	if err := decodeXML(resp, &docInfo); err != nil {
+		return "", fmt.Errorf("ошибка парсинга информации о документе: %w", err)
+	}
+
+	// Парсить OFFSET как hex
+	offset, err := strconv.ParseInt(docInfo.Offset, 16, 64)
+	if err != nil {
+		return "", fmt.Errorf("ошибка парсинга OFFSET как hex: %w", err)
+	}
+
+	// 2. Читать блоки
+	const blockSize = 512
+	var xmlData []byte
+	remaining := docInfo.Length
+
+	for remaining > 0 {
+		chunkSize := blockSize
+		if chunkSize > remaining {
+			chunkSize = remaining
+		}
+
+		// Отправить <READ OFFSET='HEXOFFSET' LENGTH='CHUNKSIZE'/>
+		cmd := fmt.Sprintf("<READ OFFSET='%X' LENGTH='%d'/>", offset, chunkSize)
+		resp, err := d.sendCommand(cmd)
+		if err != nil {
+			return "", fmt.Errorf("ошибка чтения блока offset=%X length=%d: %w", offset, chunkSize, err)
+		}
+
+		// Парсить ответ как <OK LENGTH='n'>HEXDATA</OK>
+		var blockResp struct {
+			Length int    `xml:"LENGTH,attr"`
+			Data   string `xml:",innerxml"`
+		}
+		if err := decodeXML(resp, &blockResp); err != nil {
+			return "", fmt.Errorf("ошибка парсинга блока: %w", err)
+		}
+
+		// Декодировать HEX
+		chunk, err := hex.DecodeString(blockResp.Data)
+		if err != nil {
+			return "", fmt.Errorf("ошибка декодирования HEX блока: %w", err)
+		}
+
+		// Проверить, что декодировано chunkSize байт
+		if len(chunk) != chunkSize {
+			return "", fmt.Errorf("ожидалось %d байт, декодировано %d", chunkSize, len(chunk))
+		}
+
+		xmlData = append(xmlData, chunk...)
+		offset += int64(chunkSize)
+		remaining -= chunkSize
+	}
+
+	// 3. Конвертировать собранные данные в UTF8
+	utf8XML, err := toUTF8(xmlData)
+	if err != nil {
+		return "", fmt.Errorf("ошибка конвертации XML в UTF8: %w", err)
+	}
+
+	return string(utf8XML), nil
 }
 
 func decodeXML(data []byte, v interface{}) error {

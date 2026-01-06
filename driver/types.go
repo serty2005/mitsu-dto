@@ -1,5 +1,11 @@
 package driver
 
+import (
+	"fmt"
+	"regexp"
+	"time"
+)
+
 // FiscalInfo содержит агрегированную информацию о фискальном регистраторе.
 type FiscalInfo struct {
 	ModelName        string `json:"modelName"`
@@ -10,6 +16,7 @@ type FiscalInfo struct {
 	Inn              string `json:"INN"`
 	FnSerial         string `json:"fn_serial"`
 	RegistrationDate string `json:"datetime_reg"`
+	FdNumber         string `json:"fd_number"`
 	FnEndDate        string `json:"dateTime_end"`
 	OfdName          string `json:"ofdName"`
 	SoftwareDate     string `json:"bootVersion"`
@@ -90,13 +97,15 @@ type RegData struct {
 	RegDate    string `xml:"DATE,attr"`
 	RegTime    string `xml:"TIME,attr"`
 	RegNumber  string `xml:"REG,attr"`   // Порядковый номер регистрации
+	FdNumber   string `xml:"FD,attr"`    // Номер фискального документа
+	FpNumber   string `xml:"T1077,attr"` // Фискальный признак из T1077
 	Base       string `xml:"BASE,attr"`  // Коды причин регистрации
 	TaxSystems string `xml:"T1062,attr"` // СНО (0,1,...)
 	TaxBase    string `xml:"T1062_Base,attr"`
 
 	// Маски режимов
-	Mode    string `xml:"MODE,attr"`
-	ExtMode string `xml:"ExtMODE,attr"`
+	ModeMask    uint32 `xml:"MODE,attr"`
+	ExtModeMask uint32 `xml:"ExtMODE,attr"`
 
 	// Флаги (атрибуты)
 	MarkAttr      string `xml:"MARK,attr"`  // Маркировка
@@ -127,6 +136,33 @@ type RegData struct {
 	EmailSender string `xml:"T1117"`
 	// T1036 может быть и тегом
 	AutoNumTag string `xml:"T1036"`
+
+	// Дополнительные поля для диалога
+	FnSerial      string // Заводской номер ФН
+	FnEdition     string // Исполнение ФН
+	PrinterSerial string // Серийный номер ФР
+}
+
+// DecodeMode декодирует битовую маску MODE в список установленных битов.
+func DecodeMode(mask uint32) []string {
+	var res []string
+	for i := 0; i < 32; i++ {
+		if mask&(1<<i) != 0 {
+			res = append(res, fmt.Sprintf("MODE бит %d", i))
+		}
+	}
+	return res
+}
+
+// DecodeExtMode декодирует битовую маску ExtMODE в список установленных битов.
+func DecodeExtMode(mask uint32) []string {
+	var res []string
+	for i := 0; i < 32; i++ {
+		if mask&(1<<i) != 0 {
+			res = append(res, fmt.Sprintf("ExtMODE бит %d", i))
+		}
+	}
+	return res
 }
 
 // ShiftStatus содержит информацию о текущей смене.
@@ -190,6 +226,30 @@ type MarkingStatus struct {
 	Holds     int    `xml:"HOLDS,attr"`
 	Pending   int    `xml:"PENDING,attr"`
 	Warning   int    `xml:"WARNING,attr"`
+}
+
+// RegResponse содержит ответ на команду регистрации/перерегистрации.
+type RegResponse struct {
+	FdNumber string `xml:"FD,attr"`    // Номер фискального документа
+	FpNumber string `xml:"T1077,attr"` // Фискальный признак из T1077
+}
+
+// CloseFnResult содержит результат закрытия фискального архива.
+type CloseFnResult struct {
+	FD int    // номер фискального документа
+	FP string // фискальный признак
+}
+
+// ReportFnCloseData содержит данные для отчета о закрытии фискального архива.
+type ReportFnCloseData struct {
+	DateTime  string
+	FP        string
+	FD        int
+	RNM       string
+	FNNumber  string
+	KKTNumber string
+	Address   string
+	Place     string
 }
 
 // RegistrationRequest содержит параметры для регистрации ККТ.
@@ -257,4 +317,72 @@ type DeviceOptions struct {
 	B7 int `xml:"b7,attr"` // Текст рядом с QR
 	B8 int `xml:"b8,attr"` // Печать кол-ва покупок
 	B9 int `xml:"b9,attr"` // Базовая СНО
+}
+
+// ReportKind определяет тип отчета.
+type ReportKind string
+
+const (
+	ReportKindRegistration ReportKind = "registration"
+	ReportKindCloseFn      ReportKind = "close_fn"
+	// Другие типы отчетов можно добавить здесь
+)
+
+// Константы для типов отчетов
+const (
+	ReportReg   ReportKind = ReportKindRegistration
+	ReportRereg ReportKind = ReportKindRegistration
+)
+
+// ReportMeta содержит метаданные и данные для отчета.
+type ReportMeta struct {
+	Kind  ReportKind
+	Title string
+	Data  interface{} // Данные отчета, например RegData или ReportFnCloseData
+	Text  string      // Готовый текст отчета, если уже сформирован
+}
+
+// GetReportMeta возвращает метаданные отчета по типу документа.
+func GetReportMeta(typeCode int) ReportMeta {
+	switch typeCode {
+	case 1: // Отчёт о регистрации
+		return ReportMeta{
+			Kind:  ReportReg,
+			Title: "Отчет о регистрации",
+		}
+	case 11: // Отчет о (пере) регистрации
+		return ReportMeta{
+			Kind:  ReportRereg,
+			Title: "Отчет о перерегистрации",
+		}
+	case 6: // Отчёт о закрытии ФН
+		return ReportMeta{
+			Kind:  ReportKindCloseFn,
+			Title: "Отчет о закрытии фискального архива",
+		}
+	default:
+		return ReportMeta{
+			Kind:  "",
+			Title: "Неизвестный отчет",
+		}
+	}
+}
+
+// ExtractDocDateTime парсит XML строку, находит содержимое тега <T1012> и возвращает дату-время в формате "02.01.2006 15:04".
+// Поддерживает layout'ы: "02-01-06T15:04", "02-01-06T15:04:05", "2006-01-02T15:04", "2006-01-02T15:04:05".
+// Если тег отсутствует или парсинг не удался, возвращает ошибку.
+func ExtractDocDateTime(xmlStr string) (string, error) {
+	re := regexp.MustCompile(`<T1012>([^<]*)</T1012>`)
+	matches := re.FindStringSubmatch(xmlStr)
+	if len(matches) < 2 {
+		return "", fmt.Errorf("тег T1012 не найден")
+	}
+	dateStr := matches[1]
+	layouts := []string{"02-01-06T15:04", "02-01-06T15:04:05", "2006-01-02T15:04", "2006-01-02T15:04:05"}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, dateStr); err == nil {
+			return t.Format("02.01.2006 15:04"), nil
+		}
+	}
+	return "", fmt.Errorf("не удалось распарсить дату-время: %s", dateStr)
 }

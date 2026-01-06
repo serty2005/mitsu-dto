@@ -50,6 +50,7 @@ func (d *mitsuDriver) GetFiscalInfo() (*FiscalInfo, error) {
 			Inn        string `xml:"T1018,attr"`
 			FfdVer     string `xml:"T1209,attr"`
 			RegDate    string `xml:"DATE,attr"`
+			FdNumber   string `xml:"FD,attr"`    // Номер фискального документа
 			MarkAttr   string `xml:"MARK,attr"`  // Признак маркировки ('1' - да)
 			ExciseAttr string `xml:"T1207,attr"` // Признак подакцизных ('1' - да)
 			// Вложенные теги
@@ -65,6 +66,7 @@ func (d *mitsuDriver) GetFiscalInfo() (*FiscalInfo, error) {
 		info.Inn = r.Inn
 		info.FfdVersion = r.FfdVer
 		info.RegistrationDate = r.RegDate
+		info.FdNumber = r.FdNumber
 		info.OrganizationName = r.OrgName
 		info.Address = r.Address
 		info.OfdName = r.OfdName
@@ -353,6 +355,16 @@ func (d *mitsuDriver) GetRegistrationData() (*RegData, error) {
 	if err := decodeXML(resp, &r); err != nil {
 		return nil, err
 	}
+
+	// Получаем дополнительные данные
+	if fnStatus, err := d.GetFnStatus(); err == nil {
+		r.FnSerial = fnStatus.Serial
+		r.FnEdition = fnStatus.Edition
+	}
+	if _, serial, _, err := d.GetVersion(); err == nil {
+		r.PrinterSerial = serial
+	}
+
 	return &r, nil
 }
 
