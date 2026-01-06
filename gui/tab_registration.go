@@ -417,7 +417,7 @@ func onRegister() {
 			// log.Printf("[DRIVER] Ошибка получения типа документа: %v", err)
 		}
 		meta := driver.GetReportMeta(typeCode)
-		regData, err := drv.GetRegistrationData()
+		regData, err := GetFullRegistrationData(drv)
 		if err != nil {
 			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 			return
@@ -500,7 +500,7 @@ func onReregister() {
 			// log.Printf("[DRIVER] Ошибка получения типа документа: %v", err)
 		}
 		meta := driver.GetReportMeta(typeCode)
-		regData, err := drv.GetRegistrationData()
+		regData, err := GetFullRegistrationData(drv)
 		if err != nil {
 			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 			return
@@ -563,45 +563,26 @@ func onCloseFn() {
 		return
 	}
 	go func() {
+		// 1. Закрытие ФН (включает PRINT)
 		result, err := drv.CloseFiscalArchive()
 		if err != nil {
 			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 			return
 		}
-		// Получить XML документа и извлечь дату-время
-		dateTimeStr := "—"
-		xml, err := drv.GetDocumentXMLFromFN(result.FD)
-		if err != nil {
-			fmt.Printf("[GUI] Ошибка получения XML документа FD=%s: %v\n", result.FD, err)
-		} else {
-			dateTimeStr, err = driver.ExtractDocDateTime(xml)
-			if err != nil {
-				fmt.Printf("[GUI] Ошибка извлечения даты из XML FD=%s: %v\n", result.FD, err)
-				dateTimeStr = "—"
-			}
-		}
-		// НЕ вызывать PrintLastDocument, уже внутри
-		typeCode, err := drv.GetCurrentDocumentType()
-		if err != nil {
-			// log.Printf("[DRIVER] Ошибка получения типа документа: %v", err)
-		}
+
+		// 2. Получение типа документа для метаданных отчёта
+		typeCode, _ := drv.GetCurrentDocumentType()
 		meta := driver.GetReportMeta(typeCode)
-		regData, err := drv.GetRegistrationData()
+
+		// 3. Сбор данных для отчёта через хелпер
+		reportData, err := GetCloseFnReportData(drv, result.FD, result.FP)
 		if err != nil {
 			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 			return
 		}
-		fnData := &driver.ReportFnCloseData{
-			FD:        result.FD,
-			FP:        result.FP,
-			DateTime:  dateTimeStr,
-			RNM:       regData.RNM,
-			FNNumber:  regData.FnSerial,
-			KKTNumber: regData.PrinterSerial,
-			Address:   regData.Address,
-			Place:     regData.Place,
-		}
-		meta.Data = fnData
+
+		// 4. Отображение отчёта
+		meta.Data = reportData
 		mw.Synchronize(func() { RunReportModal(mw, meta) })
 	}()
 }

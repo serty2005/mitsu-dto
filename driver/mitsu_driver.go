@@ -3,8 +3,6 @@ package driver
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/hex"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -15,9 +13,6 @@ import (
 	"time"
 
 	"go.bug.st/serial"
-	"golang.org/x/net/html/charset"
-	"golang.org/x/text/encoding/charmap"
-	"golang.org/x/text/transform"
 )
 
 const (
@@ -113,17 +108,6 @@ func (d *mitsuDriver) disconnectLocked() error {
 		d.port = nil
 	}
 	return nil
-}
-
-// escapeXMLText экранирует только спецсимволы XML, сохраняя кавычки.
-// Это исправляет проблему, когда кавычки в названии ОФД превращались в &#34;
-func escapeXMLText(s string) string {
-	r := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-	)
-	return r.Replace(s)
 }
 
 // sendCommand отправляет команду.
@@ -356,160 +340,4 @@ func (d *mitsuDriver) performExchange(xmlCmd string) ([]byte, error) {
 	}
 
 	return responseData, nil
-}
-
-func parseError(data []byte) error {
-	utf8Data, err := toUTF8(data)
-	if err != nil {
-		utf8Data = data
-	}
-
-	type ErrorResp struct {
-		No  string `xml:"No,attr"`
-		FSE string `xml:"FSE,attr"`
-		TAG string `xml:"TAG,attr"`
-		PAR string `xml:"PAR,attr"`
-	}
-	var e ErrorResp
-
-	if err := xml.Unmarshal(utf8Data, &e); err != nil {
-		return fmt.Errorf("ошибка ККТ (нераспознанная): %s", string(data))
-	}
-
-	desc, exists := ErrorDescriptions[e.No]
-	if !exists {
-		desc = "неизвестная ошибка"
-	}
-
-	msg := fmt.Sprintf("Ошибка ККТ #%s: %s", e.No, desc)
-
-	if e.PAR != "" {
-		msg += fmt.Sprintf(" (параметр: %s)", e.PAR)
-	}
-	if e.FSE != "" {
-		fnDesc, fnExists := ErrorDescriptions[e.FSE]
-		if fnExists {
-			msg += fmt.Sprintf(", ошибка ФН #%s: %s", e.FSE, fnDesc)
-		} else {
-			msg += fmt.Sprintf(", ошибка ФН: %s", e.FSE)
-		}
-	}
-	if e.TAG != "" {
-		msg += fmt.Sprintf(" [TAG: %s]", e.TAG)
-	}
-
-	return errors.New(msg)
-}
-
-func encodeCP1251(s string) ([]byte, error) {
-	encoder := charmap.Windows1251.NewEncoder()
-	res, _, err := transform.Bytes(encoder, []byte(s))
-	if err != nil {
-		return nil, fmt.Errorf("ошибка кодирования в WIN-1251: %w", err)
-	}
-	return res, nil
-}
-
-func toUTF8(data []byte) ([]byte, error) {
-	r, err := charset.NewReaderLabel("windows-1251", bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	return io.ReadAll(r)
-}
-
-// GetCurrentDocumentType получает тип текущего документа.
-func (d *mitsuDriver) GetCurrentDocumentType() (int, error) {
-	resp, err := d.sendCommand("<GET DOC='0'/>")
-	if err != nil {
-		return 0, err
-	}
-	var r struct {
-		Type int `xml:"TYPE,attr"`
-	}
-	if err := decodeXML(resp, &r); err != nil {
-		return 0, err
-	}
-	return r.Type, nil
-}
-
-// GetDocumentXMLFromFN получает полную XML-строку документа из ФН по номеру FD.
-func (d *mitsuDriver) GetDocumentXMLFromFN(fd int) (string, error) {
-	// 1. Получить OFFSET и LENGTH
-	resp, err := d.sendCommand(fmt.Sprintf("<GET DOC='X:%d'/>", fd))
-	if err != nil {
-		return "", err
-	}
-	var docInfo struct {
-		Offset string `xml:"OFFSET,attr"`
-		Length int    `xml:"LENGTH,attr"`
-	}
-	if err := decodeXML(resp, &docInfo); err != nil {
-		return "", fmt.Errorf("ошибка парсинга информации о документе: %w", err)
-	}
-
-	// Парсить OFFSET как hex
-	offset, err := strconv.ParseInt(docInfo.Offset, 16, 64)
-	if err != nil {
-		return "", fmt.Errorf("ошибка парсинга OFFSET как hex: %w", err)
-	}
-
-	// 2. Читать блоки
-	const blockSize = 512
-	var xmlData []byte
-	remaining := docInfo.Length
-
-	for remaining > 0 {
-		chunkSize := blockSize
-		if chunkSize > remaining {
-			chunkSize = remaining
-		}
-
-		// Отправить <READ OFFSET='HEXOFFSET' LENGTH='CHUNKSIZE'/>
-		cmd := fmt.Sprintf("<READ OFFSET='%X' LENGTH='%d'/>", offset, chunkSize)
-		resp, err := d.sendCommand(cmd)
-		if err != nil {
-			return "", fmt.Errorf("ошибка чтения блока offset=%X length=%d: %w", offset, chunkSize, err)
-		}
-
-		// Парсить ответ как <OK LENGTH='n'>HEXDATA</OK>
-		var blockResp struct {
-			Length int    `xml:"LENGTH,attr"`
-			Data   string `xml:",innerxml"`
-		}
-		if err := decodeXML(resp, &blockResp); err != nil {
-			return "", fmt.Errorf("ошибка парсинга блока: %w", err)
-		}
-
-		// Декодировать HEX
-		chunk, err := hex.DecodeString(blockResp.Data)
-		if err != nil {
-			return "", fmt.Errorf("ошибка декодирования HEX блока: %w", err)
-		}
-
-		// Проверить, что декодировано chunkSize байт
-		if len(chunk) != chunkSize {
-			return "", fmt.Errorf("ожидалось %d байт, декодировано %d", chunkSize, len(chunk))
-		}
-
-		xmlData = append(xmlData, chunk...)
-		offset += int64(chunkSize)
-		remaining -= chunkSize
-	}
-
-	// 3. Конвертировать собранные данные в UTF8
-	utf8XML, err := toUTF8(xmlData)
-	if err != nil {
-		return "", fmt.Errorf("ошибка конвертации XML в UTF8: %w", err)
-	}
-
-	return string(utf8XML), nil
-}
-
-func decodeXML(data []byte, v interface{}) error {
-	utf8Data, err := toUTF8(data)
-	if err != nil {
-		return fmt.Errorf("ошибка конвертации кодировки: %w", err)
-	}
-	return xml.Unmarshal(utf8Data, v)
 }

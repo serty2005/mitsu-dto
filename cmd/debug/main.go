@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"log"
 
 	"github.com/lxn/walk"
 	d "github.com/lxn/walk/declarative"
@@ -11,12 +11,21 @@ import (
 )
 
 func main() {
-	// Для отладки интерфейса БЕЗ кассы используем FakeDriver
-	fmt.Println("Запуск в режиме эмуляции (FakeDriver)...")
+	// Для отладки интерфейса с реальным подключением к ККТ используем MitsuDriver
+	log.Printf("[DEBUG] Запуск в режиме реального подключения (MitsuDriver)...")
 
-	// Инициализируем и сразу активируем фейковый драйвер
-	fake := driver.NewFakeDriver()
-	driver.SetActive(fake)
+	// Инициализируем драйвер с дефолтными настройками (COM порт)
+	config := driver.Config{
+		ConnectionType: 0, // COM
+		ComName:        "COM9",
+		BaudRate:       115200,
+		Timeout:        3000,
+		Logger: func(msg string) {
+			log.Printf("[DEBUG] %s", msg)
+		},
+	}
+	realDriver := driver.NewMitsuDriver(config)
+	driver.SetActive(realDriver)
 
 	// Создаем структуру окна
 	mw := new(walk.MainWindow)
@@ -31,7 +40,7 @@ func main() {
 
 	err := d.MainWindow{
 		AssignTo: &mw,
-		Title:    "DEBUG SERVICE TAB (MOCK MODE)",
+		Title:    "DEBUG SERVICE TAB (REAL MODE)",
 		MinSize:  d.Size{Width: 900, Height: 600},
 		Layout:   d.VBox{},
 		Children: []d.Widget{
