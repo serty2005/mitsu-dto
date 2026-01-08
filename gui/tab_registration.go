@@ -161,6 +161,7 @@ func GetRegistrationTab() d.TabPage {
 										BindingMember: "Code",
 										DisplayMember: "Name",
 										Model: []*NV{
+											{Name: "", Code: ""},
 											{Name: "ОСН", Code: "0"},
 											{Name: "УСН доход", Code: "1"},
 											{Name: "УСН доход - расход", Code: "2"},
@@ -424,22 +425,7 @@ func onReadRegistration() {
 			}
 
 			// Установка TaxSystemBase на первую зарегистрированную СНО по умолчанию
-			if regModel.TaxOSN {
-				regModel.TaxSystemBase = "0"
-			} else if regModel.TaxUSN {
-				regModel.TaxSystemBase = "1"
-			} else if regModel.TaxUSN_M {
-				regModel.TaxSystemBase = "2"
-			} else if regModel.TaxESHN {
-				regModel.TaxSystemBase = "4"
-			} else if regModel.TaxPat {
-				regModel.TaxSystemBase = "5"
-			}
-
-			// Если есть базовая СНО, установить её
-			if regData.TaxBase != "" {
-				regModel.TaxSystemBase = regData.TaxBase
-			}
+			regModel.TaxSystemBase = regData.TaxBase
 
 			if err := regBinder.Reset(); err != nil {
 				walk.MsgBox(mw, "Ошибка биндинга", fmt.Sprintf("Ошибка обновления UI: %v", err), walk.MsgBoxIconError)
@@ -765,6 +751,7 @@ func fillRequestFromModel(isRereg bool) driver.RegistrationRequest {
 		Wholesale:        regModel.ModeWholesale,
 		Vending:          regModel.ModeVending,
 		PrinterAutomat:   regModel.ModeAutomat,
+		TaxSystemBase:    regModel.TaxSystemBase,
 	}
 
 	var taxCodes []string
