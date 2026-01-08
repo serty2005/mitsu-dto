@@ -75,6 +75,14 @@ type Driver interface {
 	// index: 0 - логотип, 1-20 - пользовательские картинки.
 	// data: бинарные данные BMP файла.
 	UploadImage(index int, data []byte) error
+
+	// OFD Exchange (раздел 13 документации)
+	OfdBeginRead() (int, error)
+	OfdReadBlock(offset, length int) ([]byte, int, error)
+	OfdEndRead() error
+	OfdLoadReceipt(receipt []byte) error
+	OfdCancelRead() error
+	OfdReadFullDocument() ([]byte, error)
 }
 
 // ActiveDriver - глобально активный драйвер

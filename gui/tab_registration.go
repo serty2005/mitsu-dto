@@ -58,10 +58,42 @@ type RegViewModel struct {
 	TaxESHN       bool // 4
 	TaxPat        bool // 5
 	TaxSystemBase string
+
+	// Информация о ФН
+	FnNumber     string
+	FnPhase      string
+	FnPhaseText  string
+	FnPhaseColor walk.Color
+	FnValidDate  string
 }
 
 var regModel *RegViewModel
 var regBinder *walk.DataBinder
+var fnPhaseLabel *walk.Label
+
+// decodeFnPhase возвращает текст и цвет для фазы ФН.
+// PHASE: 0x01=Готов к фискализации (Синий), 0x03=Боевой режим (Зелёный),
+// 0x07=ФН закрыт, отчёт не отправлен (Красный), 0x0F=ФР в архиве (Синий)
+func decodeFnPhase(phase string) (text string, color walk.Color) {
+	phase = strings.TrimPrefix(strings.ToLower(phase), "0x")
+	val, err := strconv.ParseInt(phase, 16, 32)
+	if err != nil {
+		return "Неизвестно", walk.RGB(0, 0, 0) // Чёрный по умолчанию
+	}
+
+	switch val {
+	case 0x01:
+		return "Готов к фискализации", walk.RGB(0, 0, 255) // Синий
+	case 0x03:
+		return "Боевой режим", walk.RGB(0, 128, 0) // Зелёный
+	case 0x07:
+		return "ФН закрыт", walk.RGB(255, 0, 0) // Красный
+	case 0x0F:
+		return "ФР в архиве", walk.RGB(0, 0, 255) // Синий
+	default:
+		return fmt.Sprintf("Неизвестная фаза (%s)", phase), walk.RGB(128, 128, 128)
+	}
+}
 
 // GetRegistrationTab возвращает описание вкладки "Регистрация"
 func GetRegistrationTab() d.TabPage {
@@ -140,26 +172,70 @@ func GetRegistrationTab() d.TabPage {
 							},
 						},
 					},
-					d.GroupBox{
-						Title: "Фискальные признаки",
-
-						Layout: d.Grid{Columns: 4, Margins: d.Margins{Left: 3, Top: 1, Right: 3, Bottom: 1}, Spacing: 1},
+					d.Composite{
+						Layout: d.HBox{Margins: d.Margins{Left: 3, Top: 1, Right: 3, Bottom: 1}, Spacing: 5},
 						Children: []d.Widget{
-							d.CheckBox{Text: "Автономный режим", Checked: d.Bind("ModeAutonomous")},
-							d.CheckBox{Text: "Шифрование данных", Checked: d.Bind("ModeEncryption")},
-							d.CheckBox{Text: "Расчеты за услуги", Checked: d.Bind("ModeService")},
-							d.CheckBox{Text: "Расчеты в Интернет", Checked: d.Bind("ModeInternet")},
-							d.CheckBox{Text: "Принтер в автомате", Checked: d.Bind("ModeAutomat")},
-							d.CheckBox{Text: "Только БСО", Checked: d.Bind("ModeBSO")},
-							d.CheckBox{Text: "Подакцизные товары", Checked: d.Bind("ModeExcise")},
-							d.CheckBox{Text: "Проведение азартных игр", Checked: d.Bind("ModeGambling")},
-							d.CheckBox{Text: "Проведение лотерей", Checked: d.Bind("ModeLottery")},
-							d.CheckBox{Text: "Маркированные товары", Checked: d.Bind("ModeMarking")},
-							d.CheckBox{Text: "Ломбард", Checked: d.Bind("ModePawn")},
-							d.CheckBox{Text: "Страхование", Checked: d.Bind("ModeInsurance")},
-							d.CheckBox{Text: "Общепит", Checked: d.Bind("ModeCatering")},
-							d.CheckBox{Text: "Оптовая торговля", Checked: d.Bind("ModeWholesale")},
-							d.CheckBox{Text: "Вендинг", Checked: d.Bind("ModeVending")},
+							d.GroupBox{
+								Title:  "Фискальные признаки",
+								Layout: d.Grid{Columns: 3, Margins: d.Margins{Left: 3, Top: 1, Right: 3, Bottom: 1}, Spacing: 1},
+								Children: []d.Widget{
+									// Колонка 1
+									d.CheckBox{Text: "Автономный режим", Checked: d.Bind("ModeAutonomous")},
+									d.CheckBox{Text: "Шифрование данных", Checked: d.Bind("ModeEncryption")},
+									d.CheckBox{Text: "Расчеты за услуги", Checked: d.Bind("ModeService")},
+									d.CheckBox{Text: "Расчеты в Интернет", Checked: d.Bind("ModeInternet")},
+									d.CheckBox{Text: "Принтер в автомате", Checked: d.Bind("ModeAutomat")},
+									// Колонка 2
+									d.CheckBox{Text: "Только БСО", Checked: d.Bind("ModeBSO")},
+									d.CheckBox{Text: "Подакцизные товары", Checked: d.Bind("ModeExcise")},
+									d.CheckBox{Text: "Проведение азартных игр", Checked: d.Bind("ModeGambling")},
+									d.CheckBox{Text: "Проведение лотерей", Checked: d.Bind("ModeLottery")},
+									d.CheckBox{Text: "Маркированные товары", Checked: d.Bind("ModeMarking")},
+									// Колонка 3
+									d.CheckBox{Text: "Ломбард", Checked: d.Bind("ModePawn")},
+									d.CheckBox{Text: "Страхование", Checked: d.Bind("ModeInsurance")},
+									d.CheckBox{Text: "Общепит", Checked: d.Bind("ModeCatering")},
+									d.CheckBox{Text: "Оптовая торговля", Checked: d.Bind("ModeWholesale")},
+									d.CheckBox{Text: "Вендинг", Checked: d.Bind("ModeVending")},
+								},
+							},
+							d.GroupBox{
+								Title:   "Информация о ФН",
+								Layout:  d.VBox{MarginsZero: true, Spacing: 3},
+								MinSize: d.Size{Width: 200},
+								Children: []d.Widget{
+									// Информационные поля
+									d.Composite{
+										Layout: d.Grid{Columns: 2, Spacing: 5},
+										Children: []d.Widget{
+											d.Label{Text: "№:"},
+											d.Label{Text: d.Bind("FnNumber"), Font: d.Font{Bold: true}},
+											d.Label{Text: "Фаза:"},
+											d.Label{AssignTo: &fnPhaseLabel, Text: d.Bind("FnPhaseText")},
+											d.Label{Text: "До:"},
+											d.Label{Text: d.Bind("FnValidDate"), Font: d.Font{Bold: true}},
+										},
+									},
+									// Кнопки управления
+									d.Composite{
+										Layout: d.HBox{MarginsZero: true, Spacing: 5, Alignment: d.AlignHCenterVCenter},
+										Children: []d.Widget{
+											d.PushButton{
+												Text:        "Отправить в ОФД",
+												OnClicked:   onSendToOfd,
+												MinSize:     d.Size{Width: 110},
+												ToolTipText: "Отправить первый неотправленный документ в ОФД",
+											},
+											d.PushButton{
+												Text:        "↻", // Unicode символ обновления
+												OnClicked:   onRefreshFnInfo,
+												MaxSize:     d.Size{Width: 30, Height: 30},
+												ToolTipText: "Обновить информацию о ФН",
+											},
+										},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -283,6 +359,8 @@ func onReadRegistration() {
 			return
 		}
 
+		fnStatus, fnErr := drv.GetFnStatus()
+
 		mw.Synchronize(func() {
 
 			regModel.RNM = regData.RNM
@@ -365,6 +443,31 @@ func onReadRegistration() {
 
 			if err := regBinder.Reset(); err != nil {
 				walk.MsgBox(mw, "Ошибка биндинга", fmt.Sprintf("Ошибка обновления UI: %v", err), walk.MsgBoxIconError)
+			}
+
+			// Читаем информацию о ФН
+			if fnErr == nil {
+				regModel.FnNumber = fnStatus.Serial
+				regModel.FnValidDate = fnStatus.Valid
+				regModel.FnPhase = fnStatus.Phase
+
+				// Декодируем фазу
+				phaseText, phaseColor := decodeFnPhase(fnStatus.Phase)
+				regModel.FnPhaseText = phaseText
+				regModel.FnPhaseColor = phaseColor
+			} else {
+				regModel.FnNumber = "Ошибка чтения"
+				regModel.FnPhaseText = "—"
+				regModel.FnValidDate = "—"
+			}
+
+			if err := regBinder.Reset(); err != nil {
+				walk.MsgBox(mw, "Ошибка биндинга", fmt.Sprintf("Ошибка обновления UI: %v", err), walk.MsgBoxIconError)
+			}
+
+			if fnErr == nil && fnPhaseLabel != nil {
+				_, phaseColor := decodeFnPhase(fnStatus.Phase)
+				fnPhaseLabel.SetTextColor(phaseColor)
 			}
 		})
 	}()
@@ -584,6 +687,53 @@ func onCloseFn() {
 		// 4. Отображение отчёта
 		meta.Data = reportData
 		mw.Synchronize(func() { RunReportModal(mw, meta) })
+	}()
+}
+
+// onSendToOfd отправляет первый неотправленный документ в ОФД
+func onSendToOfd() {
+	drv := driver.Active
+	if drv == nil {
+		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
+		return
+	}
+
+	go func() {
+		result, err := SendFirstUnsentDocument(drv)
+		mw.Synchronize(func() {
+			if err != nil {
+				walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError)
+				return
+			}
+
+			if result.Success {
+				walk.MsgBox(mw, "Успех",
+					fmt.Sprintf("Отправлено документов: %d", result.DocumentsSent),
+					walk.MsgBoxIconInformation)
+			} else {
+				walk.MsgBox(mw, "Информация", result.ErrorMessage, walk.MsgBoxIconWarning)
+			}
+
+			// Обновляем информацию о ФН
+			onRefreshFnInfo()
+		})
+	}()
+}
+
+// onRefreshFnInfo обновляет информацию о ФН
+func onRefreshFnInfo() {
+	drv := driver.Active
+	if drv == nil {
+		return
+	}
+
+	go func() {
+		err := RefreshFnInfo(drv)
+		if err != nil {
+			mw.Synchronize(func() {
+				logMsg("Ошибка обновления ФН: %v", err)
+			})
+		}
 	}()
 }
 
