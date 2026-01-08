@@ -179,6 +179,7 @@ type FnStatus struct {
 	LastFD  int    `xml:"LAST,attr"`
 	Flag    string `xml:"FLAG,attr"` // HEX маска предупреждений
 	Edition string `xml:"EDITION,attr"`
+	Power   string `xml:"POWER,attr"` // Флаг питания (1 = установлен, 0 = сброшен)
 }
 
 // OfdExchangeStatus содержит информацию об обмене с ОФД.

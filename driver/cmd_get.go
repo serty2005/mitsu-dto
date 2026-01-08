@@ -119,6 +119,7 @@ func (d *mitsuDriver) GetModel() (string, error) {
 }
 
 // GetVersion (3.4)
+
 func (d *mitsuDriver) GetVersion() (string, string, string, error) {
 	resp, err := d.sendCommand("<GET VER='?'/>")
 	if err != nil {
@@ -442,6 +443,20 @@ func (d *mitsuDriver) GetPowerStatus() (int, error) {
 		return 0, err
 	}
 	return r.Val, nil
+}
+
+// GetPowerFlag возвращает состояние флага питания ФН.
+// Флаг устанавливается ФН при подаче питания и сохраняется до следующего обесточивания.
+// Используется для отслеживания перезагрузок ККТ.
+// Возвращает:
+//   - true: флаг установлен (питание было подано)
+//   - false: флаг не установлен или сброшен
+func (d *mitsuDriver) GetPowerFlag() (bool, error) {
+	status, err := d.GetPowerStatus()
+	if err != nil {
+		return false, err
+	}
+	return status == 1, nil
 }
 
 // GetTimezone (3.35)

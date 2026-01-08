@@ -28,6 +28,7 @@ type Driver interface {
 	GetMarkingStatus() (*MarkingStatus, error)
 	GetTimezone() (int, error)
 	GetPowerStatus() (int, error)
+	GetPowerFlag() (bool, error) // Получить состояние флага питания ФН
 	GetOptions() (*DeviceOptions, error)
 	GetCurrentDocumentType() (int, error)
 	GetDocumentXMLFromFN(fd int) (string, error)

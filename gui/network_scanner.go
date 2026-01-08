@@ -89,7 +89,7 @@ func runNetworkScan() {
 	var foundList []string
 	for ip := range foundChan {
 		logMsg("ПОДТВЕРЖДЕНО: %s", ip)
-		foundList = append(foundList, ip)
+		foundList = append(foundList, fmt.Sprintf("%s:8200", ip))
 	}
 
 	mw.Synchronize(func() {
