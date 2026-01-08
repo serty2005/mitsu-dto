@@ -50,6 +50,7 @@ type Driver interface {
 	Register(req RegistrationRequest) (*RegResponse, error)
 	Reregister(req RegistrationRequest, reasons []int) (*RegResponse, error)
 	CloseFiscalArchive() (*CloseFnResult, error)
+	ResetMGM() error
 
 	OpenShift(operator string) error
 	CloseShift(operator string) error

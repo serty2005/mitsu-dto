@@ -210,6 +210,7 @@ type ServiceViewModel struct {
 	OptQRPos        string
 	OptRounding     string
 	OptDrawerTrig   string
+	OptB9           string
 
 	// Денежный ящик
 	DrawerPin  int
@@ -385,6 +386,7 @@ func readAllParameters() {
 			serviceModel.OptNearEnd = (opts.B6 == 1)
 			serviceModel.OptTextQR = (opts.B7 == 1)
 			serviceModel.OptCountInCheck = (opts.B8 == 1)
+			serviceModel.OptB9 = fmt.Sprintf("%d", opts.B9)
 		}
 
 		serviceBinder.Reset()
@@ -477,6 +479,7 @@ func GetServiceTab() d.TabPage {
 		OptRounding:        "0",
 		OptDrawerTrig:      "1",
 		OptCut:             true,
+		OptB9:              "0",
 		OfdClient:          "1", // По умолчанию внешний
 		SelectedClicheType: "1",
 		CurrentClicheLine:  &ClicheItem{}, // Заглушка, чтобы binder не падал
@@ -528,6 +531,7 @@ func GetServiceTab() d.TabPage {
 							d.PushButton{Text: "Тех. сброс", OnClicked: onTechReset, MinSize: d.Size{Width: 90}},
 							d.PushButton{Text: "Ден. ящик", OnClicked: onOpenDrawer, MinSize: d.Size{Width: 90}},
 							d.PushButton{Text: "X-отчёт", OnClicked: onPrintXReport, MinSize: d.Size{Width: 90}},
+							d.PushButton{Text: "Сброс МГМ", OnClicked: onMGMReset, MinSize: d.Size{Width: 90}},
 						},
 					},
 				},
@@ -641,6 +645,7 @@ func GetServiceTab() d.TabPage {
 
 											d.Label{Text: "Текст у QR:"}, d.CheckBox{Checked: d.Bind("OptTextQR")},
 											d.Label{Text: "Кол. покупок:"}, d.CheckBox{Checked: d.Bind("OptCountInCheck")},
+											d.Label{Text: "Опция b9 (СНО):"}, d.LineEdit{Text: d.Bind("OptB9"), MaxLength: 3, ToolTipText: "Сумма: СНО(1-8) + X-отчет(16)"},
 										},
 									},
 								},
@@ -898,6 +903,9 @@ func onWriteAllParameters() {
 		} else {
 			drv.SetOption(8, 0)
 		}
+		if v, err := strconv.Atoi(serviceModel.OptB9); err == nil {
+			drv.SetOption(9, v)
+		}
 
 		mw.Synchronize(func() {
 			walk.MsgBox(mw, "Успех", "Параметры отправлены", walk.MsgBoxIconInformation)
@@ -1038,6 +1046,14 @@ func onPrintXReport() {
 		return
 	}
 	go func() { drv.PrintXReport() }()
+}
+
+func onMGMReset() {
+	drv := driver.Active
+	if drv == nil {
+		return
+	}
+	go func() { drv.ResetMGM() }()
 }
 
 func onReadOfdSettings() {

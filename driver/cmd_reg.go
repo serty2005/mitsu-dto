@@ -100,10 +100,6 @@ func (d *mitsuDriver) performRegistration(req RegistrationRequest) (*RegResponse
 	if req.AutomatNumber != "" {
 		attrs += fmt.Sprintf(" T1036='%s'", req.AutomatNumber)
 	}
-	// Базовая СНО
-	if req.TaxSystemBase != "" {
-		attrs += fmt.Sprintf(" T1062_Base='%s'", req.TaxSystemBase)
-	}
 
 	// Сборка вложенных тегов
 	tags := ""

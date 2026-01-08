@@ -197,3 +197,8 @@ func (d *mitsuDriver) PrintLastDocument() error {
 	_, err := d.sendCommand("<PRINT/>")
 	return err
 }
+
+func (d *mitsuDriver) ResetMGM() error {
+	_, err := d.sendCommand("<MAKE FISCAL='RESET'/>")
+	return err
+}
