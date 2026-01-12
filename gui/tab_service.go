@@ -25,7 +25,7 @@ type NV struct {
 var (
 	// ОФД Клиент
 	listClients = []*NV{
-		{"Внешний (ПК/Служба)", "1"},
+		{"Внешний", "1"},
 		{"Встроенный (LAN)", "0"},
 	}
 	// Скорость
@@ -35,6 +35,9 @@ var (
 	// Модель принтера
 	listModels = []*NV{
 		{"RP-809", "1"}, {"F80", "2"},
+	}
+	listPapers = []*NV{
+		{"80мм", "0"}, {"57мм", "1"},
 	}
 	// Позиция QR (b1)
 	listQRPos = []*NV{
@@ -50,10 +53,10 @@ var (
 	}
 	// Часовые пояса (упрощенно)
 	listTimezones = []*NV{
-		{"UTC+2 (Калининград)", "2"}, {"UTC+3 (Москва)", "3"}, {"UTC+4 (Самара)", "4"},
-		{"UTC+5 (Екатеринбург)", "5"}, {"UTC+6 (Омск)", "6"}, {"UTC+7 (Красноярск)", "7"},
-		{"UTC+8 (Иркутск)", "8"}, {"UTC+9 (Якутск)", "9"}, {"UTC+10 (Владивосток)", "10"},
-		{"UTC+11 (Магадан)", "11"}, {"UTC+12 (Камчатка)", "12"},
+		{"UTC+2 (Клд)", "2"}, {"UTC+3 (Мск)", "3"}, {"UTC+4 (Смр)", "4"},
+		{"UTC+5 (Екб)", "5"}, {"UTC+6 (Омск)", "6"}, {"UTC+7 (Крсн)", "7"},
+		{"UTC+8 (Ирк)", "8"}, {"UTC+9 (Якт)", "9"}, {"UTC+10 (Влд)", "10"},
+		{"UTC+11 (Маг)", "11"}, {"UTC+12 (Кам)", "12"},
 	}
 
 	// --- Для КЛИШЕ ---
@@ -67,7 +70,7 @@ var (
 		{"Слева", "0"}, {"Центр", "1"}, {"Справа", "2"},
 	}
 	listFonts = []*NV{
-		{"Стандартный", "0"}, {"Сжатый (A)", "1"}, {"Мелкий (B)", "2"},
+		{"A", "0"}, {"B", "1"},
 	}
 	listUnderline = []*NV{
 		{"Нет", "0"}, {"Текст", "1"}, {"Вся строка", "2"},
@@ -527,11 +530,13 @@ func GetServiceTab() d.TabPage {
 						Title: "Операции", StretchFactor: 1,
 						Layout: d.Grid{Columns: 2, Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 4},
 						Children: []d.Widget{
-							d.PushButton{Text: "Перезагрузка", OnClicked: onRebootDevice, MinSize: d.Size{Width: 90}},
+							d.PushButton{Text: "Прогон/Отрезка", OnClicked: onFeedAndCutService, MinSize: d.Size{Width: 90}},
 							d.PushButton{Text: "Тех. сброс", OnClicked: onTechReset, MinSize: d.Size{Width: 90}},
 							d.PushButton{Text: "Ден. ящик", OnClicked: onOpenDrawer, MinSize: d.Size{Width: 90}},
 							d.PushButton{Text: "X-отчёт", OnClicked: onPrintXReport, MinSize: d.Size{Width: 90}},
 							d.PushButton{Text: "Сброс МГМ", OnClicked: onMGMReset, MinSize: d.Size{Width: 90}},
+							d.PushButton{Text: "Прочитать всё", OnClicked: func() { readNetworkSettings(); readAllParameters() }, MinSize: d.Size{Width: 90}},
+							d.PushButton{Text: "Записать всё", OnClicked: onWriteAllParameters, MinSize: d.Size{Width: 90}},
 						},
 					},
 				},
@@ -539,140 +544,113 @@ func GetServiceTab() d.TabPage {
 
 			// ТАБЫ ПОДКАТЕГОРИЙ
 			d.TabWidget{
-				MinSize: d.Size{Height: 350}, // Увеличим высоту для редактора клише
+				MinSize: d.Size{Height: 350},
 				Pages: []d.TabPage{
 
-					// 1. СВЯЗЬ И ОФД
+					// 1. ПАРАМЕТРЫ (Объединенная вкладка)
 					{
-						Title:  "Связь и ОФД",
-						Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 8},
+						Title: "Параметры",
+						// Нулевые отступы для вкладки
+						Layout: d.VBox{MarginsZero: true, Spacing: 0, Alignment: d.AlignHNearVNear},
 						Children: []d.Widget{
-							d.GroupBox{
-								Title:  "ОФД и ОИСМ (Адрес:Порт)",
-								Layout: d.Grid{Columns: 2, Spacing: 8},
-								Children: []d.Widget{
-									d.Label{Text: "Сервер ОФД:"}, d.LineEdit{Text: d.Bind("OfdString")},
-									d.Label{Text: "Сервер ОИСМ:"}, d.LineEdit{Text: d.Bind("OismString")},
-								},
-							},
 							d.Composite{
-								Layout: d.HBox{MarginsZero: true, Spacing: 10, Alignment: d.AlignHNearVNear},
+								Layout: d.HBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 4, Alignment: d.AlignHNearVNear},
 								Children: []d.Widget{
-									// ОФД Доп (Слева)
-									d.GroupBox{
-										Title:         "Настройки клиента",
-										StretchFactor: 1,
-										Layout:        d.Grid{Columns: 2, Spacing: 6},
+
+									// КОЛОНКА 1
+									d.Composite{
+										Layout: d.VBox{MarginsZero: true, Spacing: 4},
 										Children: []d.Widget{
-											d.Label{Text: "Режим:"},
-											d.ComboBox{
-												Value:                 d.Bind("OfdClient"),
-												BindingMember:         "Code",
-												DisplayMember:         "Name",
-												Model:                 listClients,
-												OnCurrentIndexChanged: checkOfdClientChange,
+											// Group 1: ОФД и ОИСМ
+											d.GroupBox{
+												Title:  "ОФД и ОИСМ",
+												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Children: []d.Widget{
+													d.Label{Text: "ОФД:"}, d.LineEdit{Text: d.Bind("OfdString"), MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}},
+													d.Label{Text: "ОИСМ:"}, d.LineEdit{Text: d.Bind("OismString"), MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}},
+													d.Label{Text: "Пояс:"}, d.ComboBox{Value: d.Bind("OptTimezone"), BindingMember: "Code", DisplayMember: "Name", Model: listTimezones, MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}},
+												},
 											},
-											d.Label{Text: "Имя клиента:"}, d.LineEdit{Text: d.Bind("OfdClient"), ReadOnly: true},
-											d.Label{Text: "Таймер ФН:"}, d.NumberEdit{Value: d.Bind("TimerFN"), MaxSize: d.Size{Width: 50}},
-											d.Label{Text: "Таймер ОФД:"}, d.NumberEdit{Value: d.Bind("TimerOFD"), MaxSize: d.Size{Width: 50}},
+											// Group 2: Принтер
+											d.GroupBox{
+												Title:  "Принтер и Бумага",
+												Layout: d.Grid{Columns: 4, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Children: []d.Widget{
+													d.Label{Text: "Модель:"}, d.ComboBox{Value: d.Bind("PrintModel"), BindingMember: "Code", DisplayMember: "Name", Model: listModels, MaxSize: d.Size{Width: 70}},
+													d.Label{Text: "Отрез:"}, d.CheckBox{Checked: d.Bind("OptCut")},
+													d.Label{Text: "Бод:"}, d.ComboBox{Value: d.Bind("PrintBaud"), BindingMember: "Code", DisplayMember: "Name", Model: listBaud, MaxSize: d.Size{Width: 70}},
+													d.Label{Text: "Звук:"}, d.CheckBox{Checked: d.Bind("OptNearEnd")},
+													d.Label{Text: "Ширина:"}, d.ComboBox{Value: d.Bind("PrintPaper"), BindingMember: "Code", DisplayMember: "Name", Model: listPapers, MaxSize: d.Size{Width: 70}},
+													d.Label{Text: "Тест:"}, d.CheckBox{Checked: d.Bind("OptAutoTest")},
+													d.Label{Text: "Шрифт:"}, d.ComboBox{Value: d.Bind("PrintFont"), BindingMember: "Code", DisplayMember: "Name", Model: listFonts, MaxSize: d.Size{Width: 70}, ToolTipText: "A-стандратный, B-компактный"},
+												},
+											},
 										},
 									},
-									// LAN (Справа)
-									d.GroupBox{
-										Title:         "Настройки сети (LAN)",
-										StretchFactor: 1,
-										Layout:        d.Grid{Columns: 2, Spacing: 6},
+
+									// КОЛОНКА 2
+									d.Composite{
+										Layout: d.VBox{MarginsZero: true, Spacing: 4},
 										Children: []d.Widget{
-											d.Label{Text: "IP:"}, d.LineEdit{Text: d.Bind("LanAddr")},
-											d.Label{Text: "Mask:"}, d.LineEdit{Text: d.Bind("LanMask")},
-											d.Label{Text: "GW:"}, d.LineEdit{Text: d.Bind("LanGw")},
-											d.Label{Text: "Port:"}, d.NumberEdit{Value: d.Bind("LanPort")},
+											// Group 3: Клиент
+											d.GroupBox{
+												Title:  "Настройки клиента",
+												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Children: []d.Widget{
+													d.Label{Text: "Режим:"}, d.ComboBox{Value: d.Bind("OfdClient"), BindingMember: "Code", DisplayMember: "Name", Model: listClients, OnCurrentIndexChanged: checkOfdClientChange, MaxSize: d.Size{Width: 100}},
+													d.Label{Text: "Т. ФН:"}, d.NumberEdit{Value: d.Bind("TimerFN"), MaxSize: d.Size{Width: 40}},
+													d.Label{Text: "Т. ОФД:"}, d.NumberEdit{Value: d.Bind("TimerOFD"), MaxSize: d.Size{Width: 40}},
+												},
+											},
+											// Group 4: Ящик
+											d.GroupBox{
+												Title:  "Денежный ящик",
+												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Children: []d.Widget{
+													d.Label{Text: "Триггер:"}, d.ComboBox{Value: d.Bind("OptDrawerTrig"), BindingMember: "Code", DisplayMember: "Name", Model: listDrawerTrig, MaxSize: d.Size{Width: 80}},
+													d.Label{Text: "PIN:"}, d.NumberEdit{Value: d.Bind("DrawerPin"), MaxSize: d.Size{Width: 40}},
+													d.Label{Text: "Rise:"}, d.NumberEdit{Value: d.Bind("DrawerRise"), MaxSize: d.Size{Width: 40}},
+													d.Label{Text: "Fall:"}, d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 40}},
+												},
+											},
 										},
 									},
-								},
-							},
-							d.Composite{
-								Layout: d.HBox{Alignment: d.AlignHCenterVCenter},
-								Children: []d.Widget{
-									d.PushButton{Text: "Прочитать настройки", OnClicked: func() { onReadOfdSettings(); onReadOismSettings(); onReadLanSettings() }},
-									d.PushButton{Text: "Записать настройки", OnClicked: func() { onWriteOfdSettings(); onWriteOismSettings(); onWriteLanSettings() }},
+
+									// КОЛОНКА 3
+									d.Composite{
+										Layout: d.VBox{MarginsZero: true, Spacing: 4},
+										Children: []d.Widget{
+											// Group 5: LAN
+											d.GroupBox{
+												Title:  "Сеть (LAN)",
+												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Children: []d.Widget{
+													d.Label{Text: "IP:"}, d.LineEdit{Text: d.Bind("LanAddr"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}},
+													d.Label{Text: "Mask:"}, d.LineEdit{Text: d.Bind("LanMask"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}},
+													d.Label{Text: "GW:"}, d.LineEdit{Text: d.Bind("LanGw"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}},
+													d.Label{Text: "Port:"}, d.NumberEdit{Value: d.Bind("LanPort"), MaxSize: d.Size{Width: 60}},
+												},
+											},
+											// Group 6: Чеки
+											d.GroupBox{
+												Title:  "Вид чека и Опции",
+												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Children: []d.Widget{
+													d.Label{Text: "QR:"}, d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos, MaxSize: d.Size{Width: 80}},
+													d.Label{Text: "Текст QR:"}, d.CheckBox{Checked: d.Bind("OptTextQR")},
+													d.Label{Text: "Покупок:"}, d.CheckBox{Checked: d.Bind("OptCountInCheck")},
+													d.Label{Text: "Округл.:"}, d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding, MaxSize: d.Size{Width: 60}},
+													d.Label{Text: "b9:"}, d.LineEdit{Text: d.Bind("OptB9"), MaxLength: 3, MaxSize: d.Size{Width: 30}, ToolTipText: "Сумма: СНО(1-8) + X-отчет(16)"},
+												},
+											},
+										},
+									},
 								},
 							},
 						},
 					},
 
-					// 2. ПАРАМЕТРЫ
-					{
-						Title:  "Параметры",
-						Layout: d.VBox{Margins: d.Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}, Spacing: 6},
-						Children: []d.Widget{
-							d.Composite{
-								Layout: d.HBox{MarginsZero: true, Spacing: 6, Alignment: d.AlignHNearVNear},
-								Children: []d.Widget{
-
-									// Группа 1: Железо
-									d.GroupBox{
-										Title:         "Принтер и Бумага",
-										StretchFactor: 1,
-										Layout:        d.Grid{Columns: 2, Spacing: 4},
-										Children: []d.Widget{
-											d.Label{Text: "Скорость:"},
-											d.ComboBox{Value: d.Bind("PrintBaud"), BindingMember: "Code", DisplayMember: "Name", Model: listBaud},
-											d.Label{Text: "Ширина:"}, d.NumberEdit{Value: d.Bind("PrintPaper")},
-											d.Label{Text: "Шрифт:"}, d.NumberEdit{Value: d.Bind("PrintFont")},
-											d.Label{Text: "Час. пояс:"},
-											d.ComboBox{Value: d.Bind("OptTimezone"), BindingMember: "Code", DisplayMember: "Name", Model: listTimezones},
-											d.Label{Text: "Авто-отрез:", MinSize: d.Size{Width: 60}}, d.CheckBox{Checked: d.Bind("OptCut")},
-											d.Label{Text: "Звук бумаги:"}, d.CheckBox{Checked: d.Bind("OptNearEnd")},
-											d.Label{Text: "Авто-тест:"}, d.CheckBox{Checked: d.Bind("OptAutoTest")},
-										},
-									},
-
-									// Группа 2: Чеки и Опции
-									d.GroupBox{
-										Title:         "Вид чека и Опции",
-										StretchFactor: 1,
-										Layout:        d.Grid{Columns: 2, Spacing: 4},
-										Children: []d.Widget{
-											d.Label{Text: "QR Позиция:"},
-											d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos},
-
-											d.Label{Text: "Округление:"},
-											d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding},
-
-											d.Label{Text: "Ящик при:"},
-											d.ComboBox{Value: d.Bind("OptDrawerTrig"), BindingMember: "Code", DisplayMember: "Name", Model: listDrawerTrig},
-
-											d.Label{Text: "Текст у QR:"}, d.CheckBox{Checked: d.Bind("OptTextQR")},
-											d.Label{Text: "Кол. покупок:"}, d.CheckBox{Checked: d.Bind("OptCountInCheck")},
-											d.Label{Text: "Опция b9 (СНО):"}, d.LineEdit{Text: d.Bind("OptB9"), MaxLength: 3, ToolTipText: "Сумма: СНО(1-8) + X-отчет(16)"},
-										},
-									},
-								},
-							},
-
-							// Группа 3: Денежный ящик (Импульсы)
-							d.GroupBox{
-								Title:  "Настройки Денежного Ящика (Импульс)",
-								Layout: d.HBox{Spacing: 10},
-								Children: []d.Widget{
-									d.Label{Text: "PIN:"}, d.NumberEdit{Value: d.Bind("DrawerPin"), MaxSize: d.Size{Width: 40}},
-									d.Label{Text: "Rise (ms):"}, d.NumberEdit{Value: d.Bind("DrawerRise"), MaxSize: d.Size{Width: 50}},
-									d.Label{Text: "Fall (ms):"}, d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 50}},
-								},
-							},
-
-							d.Composite{
-								Layout: d.HBox{Alignment: d.AlignHCenterVCenter},
-								Children: []d.Widget{
-									d.PushButton{Text: "Прочитать всё", OnClicked: readAllParameters},
-									d.PushButton{Text: "Записать всё", OnClicked: onWriteAllParameters},
-								},
-							},
-						},
-					},
-
-					// 3. КЛИШЕ (Master-Detail Редактор)
+					// 2. КЛИШЕ (Master-Detail Редактор)
 					{
 						Title:  "Клише",
 						Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 5},
@@ -846,6 +824,10 @@ func onWriteAllParameters() {
 	baudRate, _ := strconv.Atoi(serviceModel.PrintBaud)
 	tz, _ := strconv.Atoi(serviceModel.OptTimezone)
 
+	// Подготовка данных ОФД/LAN
+	ofdHost, ofdPort := splitHostPort(serviceModel.OfdString)
+	oismHost, oismPort := splitHostPort(serviceModel.OismString)
+
 	go func() {
 		// 1. Принтер
 		drv.SetPrinterSettings(driver.PrinterSettings{
@@ -907,68 +889,31 @@ func onWriteAllParameters() {
 			drv.SetOption(9, v)
 		}
 
-		mw.Synchronize(func() {
-			walk.MsgBox(mw, "Успех", "Параметры отправлены", walk.MsgBoxIconInformation)
-		})
-	}()
-}
-
-func onWriteOfdSettings() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	serviceBinder.Submit()
-
-	h, p := splitHostPort(serviceModel.OfdString)
-
-	go func() {
-		err := drv.SetOfdSettings(driver.OfdSettings{
-			Addr:     h,
-			Port:     p,
+		// 5. ОФД
+		drv.SetOfdSettings(driver.OfdSettings{
+			Addr:     ofdHost,
+			Port:     ofdPort,
 			Client:   serviceModel.OfdClient,
 			TimerFN:  serviceModel.TimerFN,
 			TimerOFD: serviceModel.TimerOFD,
 		})
-		if err == nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "OK", "ОФД записан", walk.MsgBoxIconInformation) })
-		}
-	}()
-}
 
-func onWriteOismSettings() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	serviceBinder.Submit()
+		// 6. ОИСМ
+		drv.SetOismSettings(driver.ServerSettings{Addr: oismHost, Port: oismPort})
 
-	h, p := splitHostPort(serviceModel.OismString)
-
-	go func() {
-		err := drv.SetOismSettings(driver.ServerSettings{Addr: h, Port: p})
-		if err == nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "OK", "ОИСМ записан", walk.MsgBoxIconInformation) })
-		}
-	}()
-}
-
-func onWriteLanSettings() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	serviceBinder.Submit()
-	go func() {
-		err := drv.SetLanSettings(driver.LanSettings{
+		// 7. LAN
+		drv.SetLanSettings(driver.LanSettings{
 			Addr: serviceModel.LanAddr, Mask: serviceModel.LanMask, Port: serviceModel.LanPort,
 			Dns: serviceModel.LanDns, Gw: serviceModel.LanGw,
 		})
-		if err == nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "OK", "LAN записан", walk.MsgBoxIconInformation) })
-		}
+
+		mw.Synchronize(func() {
+			walk.MsgBox(mw, "Успех", "Все параметры отправлены в ККТ", walk.MsgBoxIconInformation)
+		})
 	}()
 }
+
+// Удалены onWriteOfdSettings, onWriteOismSettings, onWriteLanSettings за ненадобностью
 
 func onTechReset() {
 	drv := driver.Active
@@ -1029,6 +974,17 @@ func onRebootDevice() {
 		mw.Synchronize(func() {
 			walk.MsgBox(mw, "Инфо", "Команда перезагрузки отправлена", walk.MsgBoxIconInformation)
 		})
+	}()
+}
+
+func onFeedAndCutService() {
+	drv := driver.Active
+	if drv == nil {
+		return
+	}
+	go func() {
+		drv.Feed(5)
+		drv.Cut()
 	}()
 }
 

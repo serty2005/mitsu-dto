@@ -17,7 +17,7 @@ type Driver interface {
 	GetHeader(int) ([]ClicheLineData, error)
 	GetLanSettings() (*LanSettings, error)
 	GetOfdSettings() (*OfdSettings, error)
-	GetOismSettings() (*ServerSettings, error)
+	GetOismSettings() (*OismSettings, error)
 	GetOkpSettings() (*ServerSettings, error)
 	GetTaxRates() (*TaxRates, error)
 	GetRegistrationData() (*RegData, error)

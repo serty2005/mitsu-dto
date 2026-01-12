@@ -6,4 +6,6 @@
 /TODO.md
 /mcp-server
 /*.md
+*.venv
+*pycache__
 *.json
