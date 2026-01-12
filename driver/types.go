@@ -62,10 +62,16 @@ type OfdSettings struct {
 	TimerOFD int    `xml:"TimerOFD,attr"`
 }
 
+// OismSettings содержит настройки ОИСМ.
+type OismSettings struct {
+	Addr string `xml:"OISM,attr"` // Для OISM
+	Port int    `xml:"PORT,attr"`
+}
+
 // ServerSettings содержит настройки сервера (OISM, OKP).
 type ServerSettings struct {
-	Addr string `xml:"ADDR,attr"` // Для OISM
-	Okp  string `xml:"OKP,attr"`  // Для OKP (имя атрибута отличается)
+	Addr string `xml:"ADDR,attr"`
+	Okp  string `xml:"OKP,attr"` // Для OKP (имя атрибута отличается)
 	Port int    `xml:"PORT,attr"`
 }
 

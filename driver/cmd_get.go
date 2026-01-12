@@ -303,13 +303,13 @@ func (d *mitsuDriver) GetOfdSettings() (*OfdSettings, error) {
 }
 
 // GetOismSettings (3.13)
-func (d *mitsuDriver) GetOismSettings() (*ServerSettings, error) {
+func (d *mitsuDriver) GetOismSettings() (*OismSettings, error) {
 	resp, err := d.sendCommand("<GET OISM='?'/>")
 	if err != nil {
 		return nil, err
 	}
-	var s ServerSettings
-	// OISM возвращает ADDR
+	var s OismSettings
+	// OISM возвращает <OK OISM='' PORT=''/>
 	if err := decodeXML(resp, &s); err != nil {
 		return nil, err
 	}
@@ -431,8 +431,9 @@ func (d *mitsuDriver) GetMarkingStatus() (*MarkingStatus, error) {
 
 // GetPowerStatus (3.33)
 // Возвращает 1 (был сбой) или 0 (ок/сброшен).
+// Использует sendCommandSilent чтобы мониторинг не спамил в лог
 func (d *mitsuDriver) GetPowerStatus() (int, error) {
-	resp, err := d.sendCommand("<GET POWER='?'/>")
+	resp, err := d.sendCommandSilent("<GET POWER='?'/>")
 	if err != nil {
 		return 0, err
 	}

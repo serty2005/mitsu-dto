@@ -3,13 +3,16 @@ package gui
 import (
 	"fmt"
 	"html"
-	"mitsuscanner/driver"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/lxn/walk"
 	d "github.com/lxn/walk/declarative"
+
+	"mitsuscanner/driver"
+	"mitsuscanner/internal/app"
+	"mitsuscanner/internal/service/registration"
 )
 
 // hasBit проверяет, установлен ли бит в целом числе
@@ -67,9 +70,21 @@ type RegViewModel struct {
 	FnValidDate  string
 }
 
-var regModel *RegViewModel
-var regBinder *walk.DataBinder
-var fnPhaseLabel *walk.Label
+// RegistrationTab - контроллер вкладки регистрации
+type RegistrationTab struct {
+	app          *app.App
+	viewModel    *RegViewModel
+	binder       *walk.DataBinder
+	fnPhaseLabel *walk.Label
+}
+
+// NewRegistrationTab создает новый экземпляр контроллера
+func NewRegistrationTab(a *app.App) *RegistrationTab {
+	return &RegistrationTab{
+		app:       a,
+		viewModel: &RegViewModel{},
+	}
+}
 
 // decodeFnPhase возвращает текст и цвет для фазы ФН.
 // PHASE: 0x01=Готов к фискализации (Синий), 0x03=Боевой режим (Зелёный),
@@ -95,10 +110,8 @@ func decodeFnPhase(phase string) (text string, color walk.Color) {
 	}
 }
 
-// GetRegistrationTab возвращает описание вкладки "Регистрация"
-func GetRegistrationTab() d.TabPage {
-	regModel = &RegViewModel{} // Default
-
+// Create возвращает описание вкладки "Регистрация"
+func (rt *RegistrationTab) Create() d.TabPage {
 	return d.TabPage{
 		Title:  "Регистрация",
 		Layout: d.VBox{},
@@ -109,7 +122,7 @@ func GetRegistrationTab() d.TabPage {
 				Children: []d.Widget{
 					d.Label{Text: "Регистрационный номер ККТ (РНМ):"},
 					d.LineEdit{Text: d.Bind("RNM"), MinSize: d.Size{Width: 150}},
-					d.PushButton{Text: "Вычислить (CRC)", OnClicked: onCalcRNM},
+					d.PushButton{Text: "Вычислить (CRC)", OnClicked: rt.onCalcRNM},
 				},
 			},
 
@@ -212,7 +225,7 @@ func GetRegistrationTab() d.TabPage {
 											d.Label{Text: "№:"},
 											d.Label{Text: d.Bind("FnNumber"), Font: d.Font{Bold: true}},
 											d.Label{Text: "Фаза:"},
-											d.Label{AssignTo: &fnPhaseLabel, Text: d.Bind("FnPhaseText")},
+											d.Label{AssignTo: &rt.fnPhaseLabel, Text: d.Bind("FnPhaseText")},
 											d.Label{Text: "До:"},
 											d.Label{Text: d.Bind("FnValidDate"), Font: d.Font{Bold: true}},
 										},
@@ -223,13 +236,13 @@ func GetRegistrationTab() d.TabPage {
 										Children: []d.Widget{
 											d.PushButton{
 												Text:        "Отправить в ОФД",
-												OnClicked:   onSendToOfd,
+												OnClicked:   rt.onSendToOfd,
 												MinSize:     d.Size{Width: 110},
 												ToolTipText: "Отправить первый неотправленный документ в ОФД",
 											},
 											d.PushButton{
 												Text:        "↻", // Unicode символ обновления
-												OnClicked:   onRefreshFnInfo,
+												OnClicked:   rt.onRefreshFnInfo,
 												MaxSize:     d.Size{Width: 30, Height: 30},
 												ToolTipText: "Обновить информацию о ФН",
 											},
@@ -286,7 +299,7 @@ func GetRegistrationTab() d.TabPage {
 								Children: []d.Widget{
 									d.PushButton{
 										Text:      "Выбрать...",
-										OnClicked: onSelectReasons,
+										OnClicked: rt.onSelectReasons,
 										MinSize:   d.Size{Width: 100}, // Фиксируем размер кнопки
 										MaxSize:   d.Size{Width: 100},
 									},
@@ -301,18 +314,18 @@ func GetRegistrationTab() d.TabPage {
 			d.Composite{
 				Layout: d.HBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 5},
 				Children: []d.Widget{
-					d.PushButton{Text: "Считать из ККТ", OnClicked: onReadRegistration},
+					d.PushButton{Text: "Считать из ККТ", OnClicked: rt.onReadRegistration},
 					d.HSpacer{},
-					d.PushButton{Text: "Закрытие ФН", OnClicked: onCloseFn},
-					d.PushButton{Text: "Замена ФН", OnClicked: onReplaceFn},
-					d.PushButton{Text: "Перерегистрация", OnClicked: onReregister},
-					d.PushButton{Text: "Регистрация", OnClicked: onRegister},
+					d.PushButton{Text: "Закрытие ФН", OnClicked: rt.onCloseFn},
+					d.PushButton{Text: "Замена ФН", OnClicked: rt.onReplaceFn},
+					d.PushButton{Text: "Перерегистрация", OnClicked: rt.onReregister},
+					d.PushButton{Text: "Регистрация", OnClicked: rt.onRegister},
 				},
 			},
 		},
 		DataBinder: d.DataBinder{
-			AssignTo:       &regBinder,
-			DataSource:     regModel,
+			AssignTo:       &rt.binder,
+			DataSource:     rt.viewModel,
 			ErrorPresenter: d.ToolTipErrorPresenter{},
 		},
 	}
@@ -321,58 +334,58 @@ func GetRegistrationTab() d.TabPage {
 // --- Обработчики событий ---
 
 // onCalcRNM открывает диалог генерации РНМ
-func onCalcRNM() {
+func (rt *RegistrationTab) onCalcRNM() {
 	// Сначала забираем данные из формы в модель
-	if err := regBinder.Submit(); err != nil {
+	if err := rt.binder.Submit(); err != nil {
 		return
 	}
 
-	inn := strings.TrimSpace(regModel.INN)
+	inn := strings.TrimSpace(rt.viewModel.INN)
 	if len(inn) != 10 && len(inn) != 12 {
-		walk.MsgBox(mw, "Ошибка", "Для расчета РНМ заполните корректный ИНН пользователя (10 или 12 цифр).", walk.MsgBoxIconError)
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "Для расчета РНМ заполните корректный ИНН пользователя (10 или 12 цифр).", walk.MsgBoxIconError)
 		return
 	}
 
 	// Пытаемся получить заводской номер из драйвера
 	serial := ""
-	if driver.Active != nil {
-		info, err := driver.Active.GetFiscalInfo()
+	if rt.app.GetDriver() != nil {
+		info, err := rt.app.GetDriver().GetFiscalInfo()
 		if err == nil && info != nil {
 			serial = info.SerialNumber
 		}
 	}
 
 	// Запускаем диалог
-	runRnmGenerationDialog(inn, serial)
+	rt.runRnmGenerationDialog(inn, serial)
 }
 
-func onReadRegistration() {
-	drv := driver.Active
+func (rt *RegistrationTab) onReadRegistration() {
+	drv := rt.app.GetDriver()
 	if drv == nil {
-		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
 		regData, err := drv.GetRegistrationData()
 		if err != nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
+			rt.app.MainWindow.Synchronize(func() { walk.MsgBox(rt.app.MainWindow, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 			return
 		}
 
 		fnStatus, fnErr := drv.GetFnStatus()
 
-		mw.Synchronize(func() {
+		rt.app.MainWindow.Synchronize(func() {
 
-			regModel.RNM = regData.RNM
-			regModel.INN = regData.Inn
-			regModel.OrgName = regData.OrgName
-			regModel.Address = regData.Address
-			regModel.Place = regData.Place
-			regModel.Email = regData.EmailSender
-			regModel.Site = regData.Site
-			regModel.OFDINN = regData.OfdInn
-			regModel.OFDName = html.UnescapeString(regData.OfdName)
+			rt.viewModel.RNM = regData.RNM
+			rt.viewModel.INN = regData.Inn
+			rt.viewModel.OrgName = regData.OrgName
+			rt.viewModel.Address = regData.Address
+			rt.viewModel.Place = regData.Place
+			rt.viewModel.Email = regData.EmailSender
+			rt.viewModel.Site = regData.Site
+			rt.viewModel.OFDINN = regData.OfdInn
+			rt.viewModel.OFDName = html.UnescapeString(regData.OfdName)
 
 			// --- Парсинг атрибутов режимов работы ---
 
@@ -380,115 +393,115 @@ func onReadRegistration() {
 			modeInt := int(regData.ModeMask)
 			extModeInt := int(regData.ExtModeMask)
 
-			regModel.ModeEncryption = hasBit(modeInt, 0) // Шифрование
-			regModel.ModeAutonomous = hasBit(modeInt, 1) // Автономный режим
-			regModel.ModeService = hasBit(modeInt, 3)    // Услуги
-			regModel.ModeBSO = hasBit(modeInt, 4)        // БСО
-			regModel.ModeInternet = hasBit(modeInt, 5)   // Интернет
-			regModel.ModeCatering = hasBit(modeInt, 6)   // Общепит
-			regModel.ModeWholesale = hasBit(modeInt, 7)  // Опт
+			rt.viewModel.ModeEncryption = hasBit(modeInt, 0) // Шифрование
+			rt.viewModel.ModeAutonomous = hasBit(modeInt, 1) // Автономный режим
+			rt.viewModel.ModeService = hasBit(modeInt, 3)    // Услуги
+			rt.viewModel.ModeBSO = hasBit(modeInt, 4)        // БСО
+			rt.viewModel.ModeInternet = hasBit(modeInt, 5)   // Интернет
+			rt.viewModel.ModeCatering = hasBit(modeInt, 6)   // Общепит
+			rt.viewModel.ModeWholesale = hasBit(modeInt, 7)  // Опт
 
-			regModel.ModeExcise = hasBit(extModeInt, 0)    // Подакцизные
-			regModel.ModeGambling = hasBit(extModeInt, 1)  // Азартные
-			regModel.ModeLottery = hasBit(extModeInt, 2)   // Лотереи
-			regModel.ModeAutomat = hasBit(extModeInt, 3)   // Принтер в автомате
-			regModel.ModeMarking = hasBit(extModeInt, 4)   // Маркированные товары
-			regModel.ModePawn = hasBit(extModeInt, 5)      // Ломбард
-			regModel.ModeInsurance = hasBit(extModeInt, 6) // Страхование
-			regModel.ModeVending = hasBit(extModeInt, 7)   // Вендинг
+			rt.viewModel.ModeExcise = hasBit(extModeInt, 0)    // Подакцизные
+			rt.viewModel.ModeGambling = hasBit(extModeInt, 1)  // Азартные
+			rt.viewModel.ModeLottery = hasBit(extModeInt, 2)   // Лотереи
+			rt.viewModel.ModeAutomat = hasBit(extModeInt, 3)   // Принтер в автомате
+			rt.viewModel.ModeMarking = hasBit(extModeInt, 4)   // Маркированные товары
+			rt.viewModel.ModePawn = hasBit(extModeInt, 5)      // Ломбард
+			rt.viewModel.ModeInsurance = hasBit(extModeInt, 6) // Страхование
+			rt.viewModel.ModeVending = hasBit(extModeInt, 7)   // Вендинг
 
 			// Парсинг СНО
-			regModel.TaxOSN = false
-			regModel.TaxUSN = false
-			regModel.TaxUSN_M = false
-			regModel.TaxENVD = false
-			regModel.TaxESHN = false
-			regModel.TaxPat = false
+			rt.viewModel.TaxOSN = false
+			rt.viewModel.TaxUSN = false
+			rt.viewModel.TaxUSN_M = false
+			rt.viewModel.TaxENVD = false
+			rt.viewModel.TaxESHN = false
+			rt.viewModel.TaxPat = false
 
 			taxParts := strings.Split(regData.TaxSystems, ",")
 			for _, t := range taxParts {
 				trimmedT := strings.TrimSpace(t)
 				switch trimmedT {
 				case "0":
-					regModel.TaxOSN = true
+					rt.viewModel.TaxOSN = true
 				case "1":
-					regModel.TaxUSN = true
+					rt.viewModel.TaxUSN = true
 				case "2":
-					regModel.TaxUSN_M = true
+					rt.viewModel.TaxUSN_M = true
 				case "3":
-					regModel.TaxENVD = true
+					rt.viewModel.TaxENVD = true
 				case "4":
-					regModel.TaxESHN = true
+					rt.viewModel.TaxESHN = true
 				case "5":
-					regModel.TaxPat = true
+					rt.viewModel.TaxPat = true
 				}
 			}
 
 			// Установка TaxSystemBase на первую зарегистрированную СНО по умолчанию
-			regModel.TaxSystemBase = regData.TaxBase
+			rt.viewModel.TaxSystemBase = regData.TaxBase
 
-			if err := regBinder.Reset(); err != nil {
-				walk.MsgBox(mw, "Ошибка биндинга", fmt.Sprintf("Ошибка обновления UI: %v", err), walk.MsgBoxIconError)
+			if err := rt.binder.Reset(); err != nil {
+				walk.MsgBox(rt.app.MainWindow, "Ошибка биндинга", fmt.Sprintf("Ошибка обновления UI: %v", err), walk.MsgBoxIconError)
 			}
 
 			// Читаем информацию о ФН
 			if fnErr == nil {
-				regModel.FnNumber = fnStatus.Serial
-				regModel.FnValidDate = fnStatus.Valid
-				regModel.FnPhase = fnStatus.Phase
+				rt.viewModel.FnNumber = fnStatus.Serial
+				rt.viewModel.FnValidDate = fnStatus.Valid
+				rt.viewModel.FnPhase = fnStatus.Phase
 
 				// Декодируем фазу
 				phaseText, phaseColor := decodeFnPhase(fnStatus.Phase)
-				regModel.FnPhaseText = phaseText
-				regModel.FnPhaseColor = phaseColor
+				rt.viewModel.FnPhaseText = phaseText
+				rt.viewModel.FnPhaseColor = phaseColor
 			} else {
-				regModel.FnNumber = "Ошибка чтения"
-				regModel.FnPhaseText = "—"
-				regModel.FnValidDate = "—"
+				rt.viewModel.FnNumber = "Ошибка чтения"
+				rt.viewModel.FnPhaseText = "—"
+				rt.viewModel.FnValidDate = "—"
 			}
 
-			if err := regBinder.Reset(); err != nil {
-				walk.MsgBox(mw, "Ошибка биндинга", fmt.Sprintf("Ошибка обновления UI: %v", err), walk.MsgBoxIconError)
+			if err := rt.binder.Reset(); err != nil {
+				walk.MsgBox(rt.app.MainWindow, "Ошибка биндинга", fmt.Sprintf("Ошибка обновления UI: %v", err), walk.MsgBoxIconError)
 			}
 
-			if fnErr == nil && fnPhaseLabel != nil {
+			if fnErr == nil && rt.fnPhaseLabel != nil {
 				_, phaseColor := decodeFnPhase(fnStatus.Phase)
-				fnPhaseLabel.SetTextColor(phaseColor)
+				rt.fnPhaseLabel.SetTextColor(phaseColor)
 			}
 		})
 	}()
 }
 
-func onRegister() {
-	drv := driver.Active
+func (rt *RegistrationTab) onRegister() {
+	drv := rt.app.GetDriver()
 	if drv == nil {
 		return
 	}
-	if err := regBinder.Submit(); err != nil {
+	if err := rt.binder.Submit(); err != nil {
 		return
 	}
 
-	if !regexp.MustCompile(`^\d+$`).MatchString(regModel.INN) || (len(regModel.INN) != 10 && len(regModel.INN) != 12) {
-		walk.MsgBox(mw, "Ошибка", "ИНН должен состоять только из цифр и иметь длину 10 или 12 символов.", walk.MsgBoxIconError)
+	if !regexp.MustCompile(`^\d+$`).MatchString(rt.viewModel.INN) || (len(rt.viewModel.INN) != 10 && len(rt.viewModel.INN) != 12) {
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "ИНН должен состоять только из цифр и иметь длину 10 или 12 символов.", walk.MsgBoxIconError)
 		return
 	}
 
-	if strings.TrimSpace(regModel.OrgName) == "" {
-		walk.MsgBox(mw, "Ошибка", "Поле 'Наименование' обязательно для заполнения.", walk.MsgBoxIconError)
+	if strings.TrimSpace(rt.viewModel.OrgName) == "" {
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "Поле 'Наименование' обязательно для заполнения.", walk.MsgBoxIconError)
 		return
 	}
 
-	if strings.TrimSpace(regModel.Address) == "" {
-		walk.MsgBox(mw, "Ошибка", "Поле 'Адрес расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
+	if strings.TrimSpace(rt.viewModel.Address) == "" {
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "Поле 'Адрес расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
 		return
 	}
 
-	if strings.TrimSpace(regModel.Place) == "" {
-		walk.MsgBox(mw, "Ошибка", "Поле 'Место расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
+	if strings.TrimSpace(rt.viewModel.Place) == "" {
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "Поле 'Место расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
 		return
 	}
 
-	req := fillRequestFromModel(false)
+	req := rt.fillRequestFromModel(false)
 
 	go func() {
 		if err := drv.SetCashier("Администратор", ""); err != nil {
@@ -496,7 +509,9 @@ func onRegister() {
 		}
 		resp, err := drv.Register(req)
 		if err != nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка регистрации", err.Error(), walk.MsgBoxIconError) })
+			rt.app.MainWindow.Synchronize(func() {
+				walk.MsgBox(rt.app.MainWindow, "Ошибка регистрации", err.Error(), walk.MsgBoxIconError)
+			})
 			return
 		}
 		if err := drv.PrintLastDocument(); err != nil {
@@ -508,7 +523,7 @@ func onRegister() {
 		meta := driver.GetReportMeta(typeCode)
 		regData, err := GetFullRegistrationData(drv)
 		if err != nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
+			rt.app.MainWindow.Synchronize(func() { walk.MsgBox(rt.app.MainWindow, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 			return
 		}
 		if resp.FdNumber != "" {
@@ -519,57 +534,57 @@ func onRegister() {
 		}
 		meta.Data = regData
 		if meta.Kind == driver.ReportReg || meta.Kind == driver.ReportRereg {
-			mw.Synchronize(func() { RunReportModal(mw, meta) })
+			rt.app.MainWindow.Synchronize(func() { RunReportModal(rt.app.MainWindow, meta) })
 		}
 	}()
 }
 
-func onReregister() {
-	drv := driver.Active
+func (rt *RegistrationTab) onReregister() {
+	drv := rt.app.GetDriver()
 	if drv == nil {
 		return
 	}
-	if err := regBinder.Submit(); err != nil {
+	if err := rt.binder.Submit(); err != nil {
 		return
 	}
 
-	if regModel.Reasons == "" {
-		walk.MsgBox(mw, "Ошибка", "Не выбраны причины перерегистрации", walk.MsgBoxIconError)
+	if rt.viewModel.Reasons == "" {
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "Не выбраны причины перерегистрации", walk.MsgBoxIconError)
 		return
 	}
 
 	var reasons []int
-	parts := strings.Split(regModel.Reasons, ",")
+	parts := strings.Split(rt.viewModel.Reasons, ",")
 	for _, p := range parts {
 		code, err := strconv.Atoi(strings.TrimSpace(p))
 		if err != nil {
-			walk.MsgBox(mw, "Ошибка", "Некорректный формат причин", walk.MsgBoxIconError)
+			walk.MsgBox(rt.app.MainWindow, "Ошибка", "Некорректный формат причин", walk.MsgBoxIconError)
 			return
 		}
 		reasons = append(reasons, code)
 	}
 
-	if !regexp.MustCompile(`^\d+$`).MatchString(regModel.INN) || (len(regModel.INN) != 10 && len(regModel.INN) != 12) {
-		walk.MsgBox(mw, "Ошибка", "ИНН должен состоять только из цифр и иметь длину 10 или 12 символов.", walk.MsgBoxIconError)
+	if !regexp.MustCompile(`^\d+$`).MatchString(rt.viewModel.INN) || (len(rt.viewModel.INN) != 10 && len(rt.viewModel.INN) != 12) {
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "ИНН должен состоять только из цифр и иметь длину 10 или 12 символов.", walk.MsgBoxIconError)
 		return
 	}
 
-	if strings.TrimSpace(regModel.OrgName) == "" {
-		walk.MsgBox(mw, "Ошибка", "Поле 'Наименование' обязательно для заполнения.", walk.MsgBoxIconError)
+	if strings.TrimSpace(rt.viewModel.OrgName) == "" {
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "Поле 'Наименование' обязательно для заполнения.", walk.MsgBoxIconError)
 		return
 	}
 
-	if strings.TrimSpace(regModel.Address) == "" {
-		walk.MsgBox(mw, "Ошибка", "Поле 'Адрес расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
+	if strings.TrimSpace(rt.viewModel.Address) == "" {
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "Поле 'Адрес расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
 		return
 	}
 
-	if strings.TrimSpace(regModel.Place) == "" {
-		walk.MsgBox(mw, "Ошибка", "Поле 'Место расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
+	if strings.TrimSpace(rt.viewModel.Place) == "" {
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "Поле 'Место расчетов' обязательно для заполнения.", walk.MsgBoxIconError)
 		return
 	}
 
-	req := fillRequestFromModel(true)
+	req := rt.fillRequestFromModel(true)
 
 	go func() {
 		if err := drv.SetCashier("Администратор", ""); err != nil {
@@ -577,8 +592,8 @@ func onReregister() {
 		}
 		_, err := drv.Reregister(req, reasons)
 		if err != nil {
-			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Ошибка перерегистрации", err.Error(), walk.MsgBoxIconError)
+			rt.app.MainWindow.Synchronize(func() {
+				walk.MsgBox(rt.app.MainWindow, "Ошибка перерегистрации", err.Error(), walk.MsgBoxIconError)
 			})
 			return
 		}
@@ -591,39 +606,39 @@ func onReregister() {
 		meta := driver.GetReportMeta(typeCode)
 		regData, err := GetFullRegistrationData(drv)
 		if err != nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
+			rt.app.MainWindow.Synchronize(func() { walk.MsgBox(rt.app.MainWindow, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 			return
 		}
 		meta.Data = regData
 		if meta.Kind == driver.ReportReg || meta.Kind == driver.ReportRereg {
-			mw.Synchronize(func() { RunReportModal(mw, meta) })
+			rt.app.MainWindow.Synchronize(func() { RunReportModal(rt.app.MainWindow, meta) })
 		}
 	}()
 }
 
-func onSelectReasons() {
-	if err := regBinder.Submit(); err != nil {
+func (rt *RegistrationTab) onSelectReasons() {
+	if err := rt.binder.Submit(); err != nil {
 		return
 	}
-	reasons, ok := RunReasonDialog(mw, regModel.Reasons)
+	reasons, ok := RunReasonDialog(rt.app.MainWindow, rt.viewModel.Reasons)
 	if ok {
-		regModel.Reasons = reasons
-		if err := regBinder.Reset(); err != nil {
+		rt.viewModel.Reasons = reasons
+		if err := rt.binder.Reset(); err != nil {
 			fmt.Println("Binder reset error:", err)
 		}
 	}
 }
 
-func onReplaceFn() {
-	drv := driver.Active
+func (rt *RegistrationTab) onReplaceFn() {
+	drv := rt.app.GetDriver()
 	if drv == nil {
 		return
 	}
-	if err := regBinder.Submit(); err != nil {
+	if err := rt.binder.Submit(); err != nil {
 		return
 	}
 
-	req := fillRequestFromModel(false)
+	req := rt.fillRequestFromModel(false)
 	reasons := []int{1}
 
 	go func() {
@@ -632,30 +647,30 @@ func onReplaceFn() {
 		}
 		resp, err := drv.Reregister(req, reasons)
 		if err != nil {
-			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Ошибка замены ФН", err.Error(), walk.MsgBoxIconError)
+			rt.app.MainWindow.Synchronize(func() {
+				walk.MsgBox(rt.app.MainWindow, "Ошибка замены ФН", err.Error(), walk.MsgBoxIconError)
 			})
 		} else {
-			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Успех", fmt.Sprintf("ФН заменен!\nФД: %s\nФП: %s", resp.FdNumber, resp.FpNumber), walk.MsgBoxIconInformation)
+			rt.app.MainWindow.Synchronize(func() {
+				walk.MsgBox(rt.app.MainWindow, "Успех", fmt.Sprintf("ФН заменен!\nФД: %s\nФП: %s", resp.FdNumber, resp.FpNumber), walk.MsgBoxIconInformation)
 			})
 		}
 	}()
 }
 
-func onCloseFn() {
-	drv := driver.Active
+func (rt *RegistrationTab) onCloseFn() {
+	drv := rt.app.GetDriver()
 	if drv == nil {
 		return
 	}
-	if walk.MsgBox(mw, "Подтверждение", "Вы действительно хотите закрыть фискальный архив?\nЭто необратимая операция!", walk.MsgBoxYesNo|walk.MsgBoxIconWarning) != walk.DlgCmdYes {
+	if walk.MsgBox(rt.app.MainWindow, "Подтверждение", "Вы действительно хотите закрыть фискальный архив?\nЭто необратимая операция!", walk.MsgBoxYesNo|walk.MsgBoxIconWarning) != walk.DlgCmdYes {
 		return
 	}
 	go func() {
 		// 1. Закрытие ФН (включает PRINT)
 		result, err := drv.CloseFiscalArchive()
 		if err != nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
+			rt.app.MainWindow.Synchronize(func() { walk.MsgBox(rt.app.MainWindow, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 			return
 		}
 
@@ -666,111 +681,131 @@ func onCloseFn() {
 		// 3. Сбор данных для отчёта через хелпер
 		reportData, err := GetCloseFnReportData(drv, result.FD, result.FP)
 		if err != nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError) })
+			rt.app.MainWindow.Synchronize(func() { walk.MsgBox(rt.app.MainWindow, "Ошибка", err.Error(), walk.MsgBoxIconError) })
 			return
 		}
 
 		// 4. Отображение отчёта
 		meta.Data = reportData
-		mw.Synchronize(func() { RunReportModal(mw, meta) })
+		rt.app.MainWindow.Synchronize(func() { RunReportModal(rt.app.MainWindow, meta) })
 	}()
 }
 
 // onSendToOfd отправляет первый неотправленный документ в ОФД
-func onSendToOfd() {
-	drv := driver.Active
+func (rt *RegistrationTab) onSendToOfd() {
+	drv := rt.app.GetDriver()
 	if drv == nil {
-		walk.MsgBox(mw, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
+		walk.MsgBox(rt.app.MainWindow, "Ошибка", "Нет подключения к ККТ", walk.MsgBoxIconError)
 		return
 	}
 
 	go func() {
 		result, err := SendFirstUnsentDocument(drv)
-		mw.Synchronize(func() {
+		rt.app.MainWindow.Synchronize(func() {
 			if err != nil {
-				walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError)
+				walk.MsgBox(rt.app.MainWindow, "Ошибка", err.Error(), walk.MsgBoxIconError)
 				return
 			}
 
 			if result.Success {
-				walk.MsgBox(mw, "Успех",
+				walk.MsgBox(rt.app.MainWindow, "Успех",
 					fmt.Sprintf("Отправлено документов: %d", result.DocumentsSent),
 					walk.MsgBoxIconInformation)
 			} else {
-				walk.MsgBox(mw, "Информация", result.ErrorMessage, walk.MsgBoxIconWarning)
+				walk.MsgBox(rt.app.MainWindow, "Информация", result.ErrorMessage, walk.MsgBoxIconWarning)
 			}
 
 			// Обновляем информацию о ФН
-			onRefreshFnInfo()
+			rt.onRefreshFnInfo()
 		})
 	}()
 }
 
 // onRefreshFnInfo обновляет информацию о ФН
-func onRefreshFnInfo() {
-	drv := driver.Active
+func (rt *RegistrationTab) onRefreshFnInfo() {
+	drv := rt.app.GetDriver()
 	if drv == nil {
 		return
 	}
 
 	go func() {
-		err := RefreshFnInfo(drv)
+		// Используем локальный метод обновления модели, так как глобальный helper RefreshFnInfo
+		// теперь не имеет доступа к rt.viewModel и rt.binder
+		fnStatus, err := drv.GetFnStatus()
 		if err != nil {
-			mw.Synchronize(func() {
+			rt.app.MainWindow.Synchronize(func() {
 				logMsg("Ошибка обновления ФН: %v", err)
 			})
+			return
 		}
+
+		rt.app.MainWindow.Synchronize(func() {
+			rt.viewModel.FnNumber = fnStatus.Serial
+			rt.viewModel.FnValidDate = fnStatus.Valid
+			rt.viewModel.FnPhase = fnStatus.Phase
+
+			phaseText, phaseColor := decodeFnPhase(fnStatus.Phase)
+			rt.viewModel.FnPhaseText = phaseText
+			rt.viewModel.FnPhaseColor = phaseColor
+
+			if rt.binder != nil {
+				rt.binder.Reset()
+			}
+			if rt.fnPhaseLabel != nil {
+				rt.fnPhaseLabel.SetTextColor(phaseColor)
+			}
+		})
 	}()
 }
 
-func fillRequestFromModel(isRereg bool) driver.RegistrationRequest {
+func (rt *RegistrationTab) fillRequestFromModel(isRereg bool) driver.RegistrationRequest {
 	req := driver.RegistrationRequest{
 		IsReregistration: isRereg,
-		RNM:              regModel.RNM,
-		Inn:              regModel.INN,
-		OrgName:          regModel.OrgName,
-		Address:          regModel.Address,
-		Place:            regModel.Place,
-		SenderEmail:      regModel.Email,
-		FnsSite:          regModel.Site,
-		FfdVer:           regModel.FFD,
-		OfdName:          regModel.OFDName,
-		OfdInn:           regModel.OFDINN,
-		AutonomousMode:   regModel.ModeAutonomous,
-		Encryption:       regModel.ModeEncryption,
-		Service:          regModel.ModeService,
-		InternetCalc:     regModel.ModeInternet,
-		BSO:              regModel.ModeBSO,
-		Gambling:         regModel.ModeGambling,
-		Lottery:          regModel.ModeLottery,
-		Excise:           regModel.ModeExcise,
-		Marking:          regModel.ModeMarking,
-		PawnShop:         regModel.ModePawn,
-		Insurance:        regModel.ModeInsurance,
-		Catering:         regModel.ModeCatering,
-		Wholesale:        regModel.ModeWholesale,
-		Vending:          regModel.ModeVending,
-		PrinterAutomat:   regModel.ModeAutomat,
-		TaxSystemBase:    regModel.TaxSystemBase,
+		RNM:              rt.viewModel.RNM,
+		Inn:              rt.viewModel.INN,
+		OrgName:          rt.viewModel.OrgName,
+		Address:          rt.viewModel.Address,
+		Place:            rt.viewModel.Place,
+		SenderEmail:      rt.viewModel.Email,
+		FnsSite:          rt.viewModel.Site,
+		FfdVer:           rt.viewModel.FFD,
+		OfdName:          rt.viewModel.OFDName,
+		OfdInn:           rt.viewModel.OFDINN,
+		AutonomousMode:   rt.viewModel.ModeAutonomous,
+		Encryption:       rt.viewModel.ModeEncryption,
+		Service:          rt.viewModel.ModeService,
+		InternetCalc:     rt.viewModel.ModeInternet,
+		BSO:              rt.viewModel.ModeBSO,
+		Gambling:         rt.viewModel.ModeGambling,
+		Lottery:          rt.viewModel.ModeLottery,
+		Excise:           rt.viewModel.ModeExcise,
+		Marking:          rt.viewModel.ModeMarking,
+		PawnShop:         rt.viewModel.ModePawn,
+		Insurance:        rt.viewModel.ModeInsurance,
+		Catering:         rt.viewModel.ModeCatering,
+		Wholesale:        rt.viewModel.ModeWholesale,
+		Vending:          rt.viewModel.ModeVending,
+		PrinterAutomat:   rt.viewModel.ModeAutomat,
+		TaxSystemBase:    rt.viewModel.TaxSystemBase,
 	}
 
 	var taxCodes []string
-	if regModel.TaxOSN {
+	if rt.viewModel.TaxOSN {
 		taxCodes = append(taxCodes, "0")
 	}
-	if regModel.TaxUSN {
+	if rt.viewModel.TaxUSN {
 		taxCodes = append(taxCodes, "1")
 	}
-	if regModel.TaxUSN_M {
+	if rt.viewModel.TaxUSN_M {
 		taxCodes = append(taxCodes, "2")
 	}
-	if regModel.TaxENVD {
+	if rt.viewModel.TaxENVD {
 		taxCodes = append(taxCodes, "3")
 	}
-	if regModel.TaxESHN {
+	if rt.viewModel.TaxESHN {
 		taxCodes = append(taxCodes, "4")
 	}
-	if regModel.TaxPat {
+	if rt.viewModel.TaxPat {
 		taxCodes = append(taxCodes, "5")
 	}
 	req.TaxSystems = strings.Join(taxCodes, ",")
@@ -781,7 +816,7 @@ func fillRequestFromModel(isRereg bool) driver.RegistrationRequest {
 // --- Логика генерации РНМ (CRC) ---
 
 // runRnmGenerationDialog запускает диалоговое окно для расчета РНМ
-func runRnmGenerationDialog(inn, serial string) {
+func (rt *RegistrationTab) runRnmGenerationDialog(inn, serial string) {
 	var dlg *walk.Dialog
 	var acceptPB, cancelPB *walk.PushButton
 	var db *walk.DataBinder
@@ -832,16 +867,16 @@ func runRnmGenerationDialog(inn, serial string) {
 								return
 							}
 
-							// Расчет
-							rnm, err := calculateRNM(dlgModel.OrderNum, inn, dlgModel.Serial)
+							// Расчет с использованием нового сервиса
+							rnm, err := registration.CalculateRNM(dlgModel.OrderNum, inn, dlgModel.Serial)
 							if err != nil {
 								walk.MsgBox(dlg, "Ошибка расчета", err.Error(), walk.MsgBoxIconError)
 								return
 							}
 
 							// Применяем результат
-							regModel.RNM = rnm
-							if err := regBinder.Reset(); err != nil {
+							rt.viewModel.RNM = rnm
+							if err := rt.binder.Reset(); err != nil {
 								fmt.Println("Binder reset error:", err)
 							}
 							dlg.Accept()
@@ -855,68 +890,12 @@ func runRnmGenerationDialog(inn, serial string) {
 				},
 			},
 		},
-	}.Create(mw)
+	}.Create(rt.app.MainWindow)
 
 	if err != nil {
-		walk.MsgBox(mw, "Error", err.Error(), walk.MsgBoxIconError)
+		walk.MsgBox(rt.app.MainWindow, "Error", err.Error(), walk.MsgBoxIconError)
 		return
 	}
 
 	dlg.Run()
-}
-
-// calculateRNM выполняет расчет РНМ по алгоритму CRC16-CCITT.
-// Формат входных данных для CRC:
-// Pad(Order, 10) + Pad(INN, 12) + Pad(Serial, 20)
-// Результат: Pad(Order, 10) + Pad(CRC, 6)
-func calculateRNM(orderNum, inn, serial string) (string, error) {
-	// 1. Формируем строку для расчета
-	paddedOrder := padLeft(orderNum, 10, '0')
-	paddedInn := padLeft(inn, 12, '0')
-	paddedSerial := padLeft(serial, 20, '0')
-
-	// Строка: 0000000001 + 007804437548 + 00000000000000000156 (пример)
-	calcString := paddedOrder + paddedInn + paddedSerial
-
-	// 2. Считаем CRC
-	crc := crc16ccitt([]byte(calcString))
-
-	// 3. Формируем хвост (CRC дополненный до 6 цифр нулями)
-	// Пример: CRC 33271 -> "033271"
-	crcStr := fmt.Sprintf("%d", crc)
-	paddedCrc := padLeft(crcStr, 6, '0')
-
-	// 4. Итоговый РНМ
-	finalRnm := paddedOrder + paddedCrc
-
-	return finalRnm, nil
-}
-
-// crc16ccitt вычисляет CRC-16 (CCITT False)
-// Poly: 0x1021, Init: 0xFFFF
-func crc16ccitt(data []byte) uint16 {
-	crc := uint16(0xFFFF)
-	for _, b := range data {
-		crc ^= uint16(b) << 8
-		for i := 0; i < 8; i++ {
-			if (crc & 0x8000) != 0 {
-				crc = (crc << 1) ^ 0x1021
-			} else {
-				crc <<= 1
-			}
-		}
-	}
-	return crc
-}
-
-// padLeft дополняет строку символом padChar слева до длины length
-func padLeft(s string, length int, padChar byte) string {
-	if len(s) >= length {
-		return s // Или обрезать, если требуется строго length
-	}
-	padding := make([]byte, length-len(s))
-	for i := range padding {
-		padding[i] = padChar
-	}
-	return string(padding) + s
 }

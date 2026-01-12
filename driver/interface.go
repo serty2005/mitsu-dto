@@ -17,7 +17,7 @@ type Driver interface {
 	GetHeader(int) ([]ClicheLineData, error)
 	GetLanSettings() (*LanSettings, error)
 	GetOfdSettings() (*OfdSettings, error)
-	GetOismSettings() (*ServerSettings, error)
+	GetOismSettings() (*OismSettings, error)
 	GetOkpSettings() (*ServerSettings, error)
 	GetTaxRates() (*TaxRates, error)
 	GetRegistrationData() (*RegData, error)
@@ -28,7 +28,7 @@ type Driver interface {
 	GetMarkingStatus() (*MarkingStatus, error)
 	GetTimezone() (int, error)
 	GetPowerStatus() (int, error)
-	GetPowerFlag() (bool, error) // Получить состояние флага питания ФН
+	GetPowerFlag() (bool, error) // Получить состояние флага питания
 	GetOptions() (*DeviceOptions, error)
 	GetCurrentDocumentType() (int, error)
 	GetDocumentXMLFromFN(fd int) (string, error)
@@ -85,12 +85,4 @@ type Driver interface {
 	OfdLoadReceipt(receipt []byte) error
 	OfdCancelRead() error
 	OfdReadFullDocument() ([]byte, error)
-}
-
-// ActiveDriver - глобально активный драйвер
-var Active Driver
-
-// SetActive устанавливает активный драйвер
-func SetActive(d Driver) {
-	Active = d
 }

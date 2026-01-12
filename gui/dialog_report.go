@@ -301,11 +301,6 @@ func saveReportText(text string, kind driver.ReportKind) error {
 	return os.WriteFile(fullPath, []byte(text), 0644)
 }
 
-// saveRegistrationText - обратная совместимость
-func saveRegistrationText(text string) error {
-	return saveReportText(text, driver.ReportKindRegistration)
-}
-
 // formatRNM форматирует РНМ с пробелами по 4 цифры.
 func formatRNM(rnm string) string {
 	if len(rnm) != 16 {

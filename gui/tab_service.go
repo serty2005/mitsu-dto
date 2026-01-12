@@ -2,13 +2,19 @@ package gui
 
 import (
 	"fmt"
-	"mitsuscanner/driver"
+	"log"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lxn/walk"
 	d "github.com/lxn/walk/declarative"
+
+	"mitsuscanner/driver"
+	"mitsuscanner/internal/app"
+	"mitsuscanner/internal/models"
+	"mitsuscanner/internal/service/settings"
 )
 
 // -----------------------------
@@ -34,7 +40,13 @@ var (
 	}
 	// Модель принтера
 	listModels = []*NV{
-		{"RP-809", "1"}, {"F80", "2"},
+		{"Без принтера", "0"}, {"RP-809", "1"}, {"F80", "2"},
+	}
+	listFonts = []*NV{
+		{"А", "0"}, {"B", "1"},
+	}
+	listPaper = []*NV{
+		{"57 мм", "57"}, {"80 мм", "80"},
 	}
 	// Позиция QR (b1)
 	listQRPos = []*NV{
@@ -66,9 +78,6 @@ var (
 	listAlign = []*NV{
 		{"Слева", "0"}, {"Центр", "1"}, {"Справа", "2"},
 	}
-	listFonts = []*NV{
-		{"Стандартный", "0"}, {"Сжатый (A)", "1"}, {"Мелкий (B)", "2"},
-	}
 	listUnderline = []*NV{
 		{"Нет", "0"}, {"Текст", "1"}, {"Вся строка", "2"},
 	}
@@ -78,79 +87,11 @@ var (
 // МОДЕЛИ ДАННЫХ КЛИШЕ
 // -----------------------------
 
-// ClicheItem представляет одну строку клише для GUI.
-type ClicheItem struct {
-	Index  int
-	Text   string
-	Format string // Сырой формат "xxxxxx"
-
-	// Поля для редактирования (разбор Format)
-	Invert    bool
-	Width     int
-	Height    int
-	Font      string // "0", "1", "2"
-	Underline string // "0", "1", "2"
-	Align     string // "0", "1", "2"
-}
-
-// ParseFormatString разбирает строку формата "xxxxxx" в поля структуры.
-func (c *ClicheItem) ParseFormatString() {
-	runes := []rune(c.Format)
-	// Добиваем нулями если короткая
-	for len(runes) < 6 {
-		runes = append(runes, '0')
-	}
-
-	c.Invert = (runes[0] == '1')
-	c.Width, _ = strconv.Atoi(string(runes[1]))
-	c.Height, _ = strconv.Atoi(string(runes[2]))
-	c.Font = string(runes[3])
-	c.Underline = string(runes[4])
-	c.Align = string(runes[5])
-}
-
-// UpdateFormatString собирает строку формата "xxxxxx" из полей структуры.
-func (c *ClicheItem) UpdateFormatString() {
-	inv := "0"
-	if c.Invert {
-		inv = "1"
-	}
-
-	// Лимиты размеров 0..8 (хотя протокол позволяет 1-8, 0-дефолт)
-	w := c.Width
-	if w < 0 {
-		w = 0
-	}
-	if w > 8 {
-		w = 8
-	}
-
-	h := c.Height
-	if h < 0 {
-		h = 0
-	}
-	if h > 8 {
-		h = 8
-	}
-
-	c.Format = fmt.Sprintf("%s%d%d%s%s%s",
-		inv, w, h,
-		ensureChar(c.Font),
-		ensureChar(c.Underline),
-		ensureChar(c.Align))
-}
-
-func ensureChar(s string) string {
-	if len(s) == 0 {
-		return "0"
-	}
-	return string(s[0])
-}
-
 // ClicheModel - модель для TableView.
+// Использует models.ClicheItem вместо локальной структуры.
 type ClicheModel struct {
 	walk.TableModelBase
-	Items []*ClicheItem
+	Items []*models.ClicheItem
 }
 
 func (m *ClicheModel) RowCount() int {
@@ -217,15 +158,39 @@ type ServiceViewModel struct {
 	DrawerRise int
 	DrawerFall int
 
-	// --- Клише (Новая структура) ---
-	SelectedClicheType string        // "1".."4"
-	ClicheItems        []*ClicheItem // 10 строк
-	CurrentClicheLine  *ClicheItem   // Указатель на редактируемую строку
+	// --- Клише ---
+	SelectedClicheType string               // "1".."4"
+	ClicheItems        []*models.ClicheItem // 10 строк
+	CurrentClicheLine  *models.ClicheItem   // Указатель на редактируемую строку
+
+	// --- Снимок для сравнения ---
+	OriginalSnapshot *models.Snapshot
 }
 
-var (
-	serviceModel  *ServiceViewModel
-	serviceBinder *walk.DataBinder // Биндинг основной вкладки
+// CreateSnapshot создает глубокую копию текущих настроек для последующего сравнения
+func (s *ServiceViewModel) CreateSnapshot() *models.Snapshot {
+	return models.CreateSnapshotFromModel(
+		s.OfdString, s.OfdClient,
+		s.TimerFN, s.TimerOFD,
+		s.OismString,
+		s.LanAddr, s.LanPort, s.LanMask, s.LanDns, s.LanGw,
+		s.PrintModel, s.PrintBaud, s.PrintPaper, s.PrintFont,
+		s.OptTimezone, s.OptCut, s.OptAutoTest, s.OptNearEnd, s.OptTextQR, s.OptCountInCheck,
+		s.OptQRPos, s.OptRounding, s.OptDrawerTrig, s.OptB9,
+		s.DrawerPin, s.DrawerRise, s.DrawerFall,
+		s.ClicheItems,
+	)
+}
+
+// -----------------------------
+// SERVICE TAB (КОНТРОЛЛЕР)
+// -----------------------------
+
+type ServiceTab struct {
+	app         *app.App
+	viewModel   *ServiceViewModel
+	binder      *walk.DataBinder
+	clicheModel *ClicheModel
 
 	// Элементы для прямого доступа (Время)
 	kktTimeLabel *walk.Label
@@ -238,12 +203,82 @@ var (
 	// Флаг загрузки (блокировка событий)
 	isLoadingData bool
 
+	// --- ActionButton ---
+	actionButton *walk.PushButton
+	isWriteMode  bool
+	normalFont   *walk.Font
+	boldFont     *walk.Font
+
+	// --- Labels for highlighting ---
+	ofdStringLabel       *walk.Label
+	oismStringLabel      *walk.Label
+	lanAddrLabel         *walk.Label
+	lanMaskLabel         *walk.Label
+	lanDnsLabel          *walk.Label
+	lanGwLabel           *walk.Label
+	lanPortLabel         *walk.Label
+	ofdClientLabel       *walk.Label
+	timerFNLabel         *walk.Label
+	timerOFDLabel        *walk.Label
+	printModelLabel      *walk.Label
+	printBaudLabel       *walk.Label
+	printPaperLabel      *walk.Label
+	printFontLabel       *walk.Label
+	optTimezoneLabel     *walk.Label
+	optCutLabel          *walk.Label
+	optNearEndLabel      *walk.Label
+	optAutoTestLabel     *walk.Label
+	optQRPosLabel        *walk.Label
+	optRoundingLabel     *walk.Label
+	optDrawerTrigLabel   *walk.Label
+	optTextQRLabel       *walk.Label
+	optCountInCheckLabel *walk.Label
+	optB9Label           *walk.Label
+	drawerPinLabel       *walk.Label
+	drawerRiseLabel      *walk.Label
+	drawerFallLabel      *walk.Label
+
 	// --- Элементы редактора Клише ---
 	clicheTable        *walk.TableView
-	clicheModel        *ClicheModel
 	clicheEditorGroup  *walk.GroupBox
 	clicheEditorBinder *walk.DataBinder // Биндинг панели редактирования
-)
+}
+
+// NewServiceTab создает новый экземпляр контроллера ServiceTab
+func NewServiceTab(a *app.App) *ServiceTab {
+	st := &ServiceTab{
+		app: a,
+		viewModel: &ServiceViewModel{
+			PrintModel:         "1",
+			PrintBaud:          "115200",
+			PrintPaper:         80,
+			PrintFont:          0,
+			DrawerPin:          5,
+			DrawerRise:         100,
+			DrawerFall:         100,
+			OptTimezone:        "3",
+			OptQRPos:           "1",
+			OptRounding:        "0",
+			OptDrawerTrig:      "1",
+			OptCut:             true,
+			OptB9:              "0",
+			OfdClient:          "1", // По умолчанию внешний
+			SelectedClicheType: "1",
+			CurrentClicheLine:  &models.ClicheItem{}, // Заглушка
+		},
+	}
+
+	// Инициализация строк клише (10 пустых)
+	st.viewModel.ClicheItems = make([]*models.ClicheItem, 10)
+	for i := 0; i < 10; i++ {
+		item := &models.ClicheItem{Index: i, Format: "000000"}
+		item.ParseFormatString()
+		st.viewModel.ClicheItems[i] = item
+	}
+	st.clicheModel = &ClicheModel{Items: st.viewModel.ClicheItems}
+
+	return st
+}
 
 // -----------------------------
 // УТИЛИТЫ
@@ -272,51 +307,66 @@ func joinHostPort(host string, port int) string {
 // ЗАГРУЗКА ДАННЫХ
 // -----------------------------
 
-func loadServiceInitial() {
+func (st *ServiceTab) loadServiceInitial() {
 	// Ждем инициализации окна
 	go func() {
 		for i := 0; i < 20; i++ {
-			if mw != nil && mw.Handle() != 0 {
+			if st.app.MainWindow != nil && st.app.MainWindow.Handle() != 0 {
 				break
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		if mw == nil {
+		if st.app.MainWindow == nil {
+			log.Printf("[GUI] loadServiceInitial: MainWindow is nil after wait")
+			return
+		}
+		log.Printf("[GUI] loadServiceInitial: MainWindow ready, Handle: %d", st.app.MainWindow.Handle())
+		if st.app.MainWindow.Handle() == 0 {
+			log.Printf("[GUI] loadServiceInitial: Handle is 0, window not ready, skipping")
 			return
 		}
 
-		drv := driver.Active
+		drv := st.app.GetDriver()
 		if drv == nil {
-			mw.Synchronize(func() {
-				serviceModel.KktTimeStr = "Нет подключения"
-				serviceModel.PcTimeStr = time.Now().Format("02.01.2006 15:04:05")
-				serviceBinder.Reset()
+			log.Printf("[GUI] loadServiceInitial: Driver is nil, calling Synchronize")
+			st.app.MainWindow.Synchronize(func() {
+				log.Printf("[GUI] loadServiceInitial: Inside Synchronize for no driver")
+				st.viewModel.KktTimeStr = "Нет подключения"
+				st.viewModel.PcTimeStr = time.Now().Format("02.01.2006 15:04:05")
+				st.binder.Reset()
 			})
 			return
 		}
 
 		// 1. Время
 		t, err := drv.GetDateTime()
-		mw.Synchronize(func() {
+		log.Printf("[GUI] loadServiceInitial: Calling Synchronize for time update")
+		st.app.MainWindow.Synchronize(func() {
+			log.Printf("[GUI] loadServiceInitial: Inside Synchronize for time")
 			if err == nil {
-				serviceModel.KktTimeStr = t.Format("02.01.2006 15:04:05")
+				st.viewModel.KktTimeStr = t.Format("02.01.2006 15:04:05")
 			} else {
-				serviceModel.KktTimeStr = "Ошибка"
+				st.viewModel.KktTimeStr = "Ошибка"
 			}
-			serviceBinder.Reset()
+			st.binder.Reset()
 		})
 
 		// 2. Остальные настройки
-		mw.Synchronize(func() { isLoadingData = true })
-		readNetworkSettings()
-		readAllParameters()
-		// Клише загружается отдельно по кнопке, но можно инициализировать модель пустыми
-		mw.Synchronize(func() { isLoadingData = false })
+		log.Printf("[GUI] loadServiceInitial: Calling Synchronize for loading start")
+		st.app.MainWindow.Synchronize(func() { st.isLoadingData = true })
+		st.readNetworkSettings()
+		st.readAllParameters()
+		// Клише загружается отдельно по кнопке
+		log.Printf("[GUI] loadServiceInitial: Calling Synchronize for loading end")
+		st.app.MainWindow.Synchronize(func() {
+			st.isLoadingData = false
+			st.viewModel.OriginalSnapshot = st.viewModel.CreateSnapshot()
+		})
 	}()
 }
 
-func readNetworkSettings() {
-	drv := driver.Active
+func (st *ServiceTab) readNetworkSettings() {
+	drv := st.app.GetDriver()
 	if drv == nil {
 		return
 	}
@@ -325,29 +375,29 @@ func readNetworkSettings() {
 	oism, _ := drv.GetOismSettings()
 	lan, _ := drv.GetLanSettings()
 
-	mw.Synchronize(func() {
+	st.app.MainWindow.Synchronize(func() {
 		if ofd != nil {
-			serviceModel.OfdString = joinHostPort(ofd.Addr, ofd.Port)
-			serviceModel.OfdClient = ofd.Client
-			serviceModel.TimerFN = ofd.TimerFN
-			serviceModel.TimerOFD = ofd.TimerOFD
+			st.viewModel.OfdString = joinHostPort(ofd.Addr, ofd.Port)
+			st.viewModel.OfdClient = ofd.Client
+			st.viewModel.TimerFN = ofd.TimerFN
+			st.viewModel.TimerOFD = ofd.TimerOFD
 		}
 		if oism != nil {
-			serviceModel.OismString = joinHostPort(oism.Addr, oism.Port)
+			st.viewModel.OismString = joinHostPort(oism.Addr, oism.Port)
 		}
 		if lan != nil {
-			serviceModel.LanAddr = lan.Addr
-			serviceModel.LanPort = lan.Port
-			serviceModel.LanMask = lan.Mask
-			serviceModel.LanDns = lan.Dns
-			serviceModel.LanGw = lan.Gw
+			st.viewModel.LanAddr = lan.Addr
+			st.viewModel.LanPort = lan.Port
+			st.viewModel.LanMask = lan.Mask
+			st.viewModel.LanDns = lan.Dns
+			st.viewModel.LanGw = lan.Gw
 		}
-		serviceBinder.Reset()
+		st.binder.Reset()
 	})
 }
 
-func readAllParameters() {
-	drv := driver.Active
+func (st *ServiceTab) readAllParameters() {
+	drv := st.app.GetDriver()
 	if drv == nil {
 		return
 	}
@@ -357,39 +407,39 @@ func readAllParameters() {
 	opts, _ := drv.GetOptions()
 	tz, _ := drv.GetTimezone()
 
-	mw.Synchronize(func() {
+	st.app.MainWindow.Synchronize(func() {
 		// Принтер
 		if prn != nil {
-			serviceModel.PrintModel = prn.Model
-			serviceModel.PrintBaud = strconv.Itoa(prn.BaudRate)
-			serviceModel.PrintPaper = prn.Paper
-			serviceModel.PrintFont = prn.Font
+			st.viewModel.PrintModel = prn.Model
+			st.viewModel.PrintBaud = strconv.Itoa(prn.BaudRate)
+			st.viewModel.PrintPaper = prn.Paper
+			st.viewModel.PrintFont = prn.Font
 		}
 
 		// Ящик
 		if cd != nil {
-			serviceModel.DrawerPin = cd.Pin
-			serviceModel.DrawerRise = cd.Rise
-			serviceModel.DrawerFall = cd.Fall
+			st.viewModel.DrawerPin = cd.Pin
+			st.viewModel.DrawerRise = cd.Rise
+			st.viewModel.DrawerFall = cd.Fall
 		}
 
 		// Часовой пояс
-		serviceModel.OptTimezone = strconv.Itoa(tz)
+		st.viewModel.OptTimezone = strconv.Itoa(tz)
 
 		// Опции
 		if opts != nil {
-			serviceModel.OptQRPos = fmt.Sprintf("%d", opts.B1)
-			serviceModel.OptRounding = fmt.Sprintf("%d", opts.B2)
-			serviceModel.OptCut = (opts.B3 == 1)
-			serviceModel.OptAutoTest = (opts.B4 == 1)
-			serviceModel.OptDrawerTrig = fmt.Sprintf("%d", opts.B5)
-			serviceModel.OptNearEnd = (opts.B6 == 1)
-			serviceModel.OptTextQR = (opts.B7 == 1)
-			serviceModel.OptCountInCheck = (opts.B8 == 1)
-			serviceModel.OptB9 = fmt.Sprintf("%d", opts.B9)
+			st.viewModel.OptQRPos = fmt.Sprintf("%d", opts.B1)
+			st.viewModel.OptRounding = fmt.Sprintf("%d", opts.B2)
+			st.viewModel.OptCut = (opts.B3 == 1)
+			st.viewModel.OptAutoTest = (opts.B4 == 1)
+			st.viewModel.OptDrawerTrig = fmt.Sprintf("%d", opts.B5)
+			st.viewModel.OptNearEnd = (opts.B6 == 1)
+			st.viewModel.OptTextQR = (opts.B7 == 1)
+			st.viewModel.OptCountInCheck = (opts.B8 == 1)
+			st.viewModel.OptB9 = fmt.Sprintf("%d", opts.B9)
 		}
 
-		serviceBinder.Reset()
+		st.binder.Reset()
 	})
 }
 
@@ -397,40 +447,40 @@ func readAllParameters() {
 // ЛОГИКА ВРЕМЕНИ
 // -----------------------------
 
-func startClocks() {
-	if pcTicker == nil {
-		pcTicker = time.NewTicker(time.Second)
+func (st *ServiceTab) startClocks() {
+	if st.pcTicker == nil {
+		st.pcTicker = time.NewTicker(time.Second)
 		go func() {
-			for range pcTicker.C {
-				if mw == nil || mw.Handle() == 0 {
+			for range st.pcTicker.C {
+				if st.app.MainWindow == nil || st.app.MainWindow.Handle() == 0 {
 					continue
 				}
-				mw.Synchronize(func() {
+				st.app.MainWindow.Synchronize(func() {
 					now := time.Now()
-					serviceModel.PcTimeStr = now.Format("02.01.2006 15:04:05")
-					checkTimeDifference(now)
-					if pcTimeLabel != nil {
-						pcTimeLabel.SetText(serviceModel.PcTimeStr)
+					st.viewModel.PcTimeStr = now.Format("02.01.2006 15:04:05")
+					st.checkTimeDifference(now)
+					if st.pcTimeLabel != nil {
+						st.pcTimeLabel.SetText(st.viewModel.PcTimeStr)
 					}
 				})
 			}
 		}()
 	}
-	if kktTicker == nil {
-		kktTicker = time.NewTicker(time.Second)
+	if st.kktTicker == nil {
+		st.kktTicker = time.NewTicker(time.Second)
 		go func() {
-			for range kktTicker.C {
-				if mw == nil || mw.Handle() == 0 {
+			for range st.kktTicker.C {
+				if st.app.MainWindow == nil || st.app.MainWindow.Handle() == 0 {
 					continue
 				}
-				mw.Synchronize(func() {
-					if len(serviceModel.KktTimeStr) > 10 && serviceModel.KktTimeStr != "Нет подключения" && serviceModel.KktTimeStr != "Ошибка" {
-						t, err := time.Parse("02.01.2006 15:04:05", serviceModel.KktTimeStr)
+				st.app.MainWindow.Synchronize(func() {
+					if len(st.viewModel.KktTimeStr) > 10 && st.viewModel.KktTimeStr != "Нет подключения" && st.viewModel.KktTimeStr != "Ошибка" {
+						t, err := time.Parse("02.01.2006 15:04:05", st.viewModel.KktTimeStr)
 						if err == nil {
 							t = t.Add(time.Second)
-							serviceModel.KktTimeStr = t.Format("02.01.2006 15:04:05")
-							if kktTimeLabel != nil {
-								kktTimeLabel.SetText(serviceModel.KktTimeStr)
+							st.viewModel.KktTimeStr = t.Format("02.01.2006 15:04:05")
+							if st.kktTimeLabel != nil {
+								st.kktTimeLabel.SetText(st.viewModel.KktTimeStr)
 							}
 						}
 					}
@@ -440,13 +490,13 @@ func startClocks() {
 	}
 }
 
-func checkTimeDifference(pcTime time.Time) {
-	if kktTimeLabel == nil {
+func (st *ServiceTab) checkTimeDifference(pcTime time.Time) {
+	if st.kktTimeLabel == nil {
 		return
 	}
-	kktTime, err := time.Parse("02.01.2006 15:04:05", serviceModel.KktTimeStr)
+	kktTime, err := time.Parse("02.01.2006 15:04:05", st.viewModel.KktTimeStr)
 	if err != nil {
-		kktTimeLabel.SetTextColor(walk.RGB(0, 0, 0))
+		st.kktTimeLabel.SetTextColor(walk.RGB(0, 0, 0))
 		return
 	}
 	diff := pcTime.Sub(kktTime)
@@ -454,48 +504,19 @@ func checkTimeDifference(pcTime time.Time) {
 		diff = -diff
 	}
 	if diff > 5*time.Minute {
-		kktTimeLabel.SetTextColor(walk.RGB(255, 0, 0))
+		st.kktTimeLabel.SetTextColor(walk.RGB(255, 0, 0))
 	} else {
-		kktTimeLabel.SetTextColor(walk.RGB(0, 0, 0))
+		st.kktTimeLabel.SetTextColor(walk.RGB(0, 0, 0))
 	}
 }
 
 // -----------------------------
-// UI: GET SERVICE TAB
+// UI: CREATE
 // -----------------------------
 
-func GetServiceTab() d.TabPage {
-	// Инициализация модели
-	serviceModel = &ServiceViewModel{
-		PrintModel:         "1",
-		PrintBaud:          "115200",
-		PrintPaper:         80,
-		PrintFont:          0,
-		DrawerPin:          5,
-		DrawerRise:         100,
-		DrawerFall:         100,
-		OptTimezone:        "3",
-		OptQRPos:           "1",
-		OptRounding:        "0",
-		OptDrawerTrig:      "1",
-		OptCut:             true,
-		OptB9:              "0",
-		OfdClient:          "1", // По умолчанию внешний
-		SelectedClicheType: "1",
-		CurrentClicheLine:  &ClicheItem{}, // Заглушка, чтобы binder не падал
-	}
-
-	// Инициализация строк клише (10 пустых)
-	serviceModel.ClicheItems = make([]*ClicheItem, 10)
-	for i := 0; i < 10; i++ {
-		item := &ClicheItem{Index: i, Format: "000000"}
-		item.ParseFormatString()
-		serviceModel.ClicheItems[i] = item
-	}
-	clicheModel = &ClicheModel{Items: serviceModel.ClicheItems}
-
-	loadServiceInitial()
-	startClocks()
+func (st *ServiceTab) Create() d.TabPage {
+	st.loadServiceInitial()
+	st.startClocks()
 
 	return d.TabPage{
 		Title:  "Сервис",
@@ -514,24 +535,25 @@ func GetServiceTab() d.TabPage {
 								Layout: d.Grid{Columns: 2, Spacing: 4},
 								Children: []d.Widget{
 									d.Label{Text: "ККТ:", Font: d.Font{PointSize: 8}},
-									d.Label{AssignTo: &kktTimeLabel, Text: d.Bind("KktTimeStr"), Font: d.Font{PointSize: 9, Bold: true}},
+									d.Label{AssignTo: &st.kktTimeLabel, Text: d.Bind("KktTimeStr"), Font: d.Font{PointSize: 9, Bold: true}},
 									d.Label{Text: "ПК:", Font: d.Font{PointSize: 8}},
-									d.Label{AssignTo: &pcTimeLabel, Text: d.Bind("PcTimeStr"), Font: d.Font{PointSize: 9, Bold: true}},
+									d.Label{AssignTo: &st.pcTimeLabel, Text: d.Bind("PcTimeStr"), Font: d.Font{PointSize: 9, Bold: true}},
 								},
 							},
 							d.VSpacer{Size: 2},
-							d.PushButton{Text: "Синхронизировать", OnClicked: onSyncTime},
+							d.PushButton{Text: "Синхронизировать", OnClicked: st.onSyncTime},
 						},
 					},
 					d.GroupBox{
 						Title: "Операции", StretchFactor: 1,
 						Layout: d.Grid{Columns: 2, Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 4},
 						Children: []d.Widget{
-							d.PushButton{Text: "Перезагрузка", OnClicked: onRebootDevice, MinSize: d.Size{Width: 90}},
-							d.PushButton{Text: "Тех. сброс", OnClicked: onTechReset, MinSize: d.Size{Width: 90}},
-							d.PushButton{Text: "Ден. ящик", OnClicked: onOpenDrawer, MinSize: d.Size{Width: 90}},
-							d.PushButton{Text: "X-отчёт", OnClicked: onPrintXReport, MinSize: d.Size{Width: 90}},
-							d.PushButton{Text: "Сброс МГМ", OnClicked: onMGMReset, MinSize: d.Size{Width: 90}},
+							d.PushButton{Text: "Прогон/Отрезка", OnClicked: st.onFeedAndCut, MinSize: d.Size{Width: 90}},
+							d.PushButton{Text: "Тех. сброс", OnClicked: st.onTechReset, MinSize: d.Size{Width: 90}},
+							d.PushButton{Text: "Ден. ящик", OnClicked: st.onOpenDrawer, MinSize: d.Size{Width: 90}},
+							d.PushButton{Text: "X-отчёт", OnClicked: st.onPrintXReport, MinSize: d.Size{Width: 90}},
+							d.PushButton{Text: "Сброс МГМ", OnClicked: st.onMGMReset, MinSize: d.Size{Width: 90}},
+							d.PushButton{AssignTo: &st.actionButton, Text: "Прочитать всё", OnClicked: st.onActionButtonClicked, MinSize: d.Size{Width: 140}},
 						},
 					},
 				},
@@ -539,140 +561,152 @@ func GetServiceTab() d.TabPage {
 
 			// ТАБЫ ПОДКАТЕГОРИЙ
 			d.TabWidget{
-				MinSize: d.Size{Height: 350}, // Увеличим высоту для редактора клише
+				MinSize: d.Size{Height: 250, Width: 300},
 				Pages: []d.TabPage{
 
-					// 1. СВЯЗЬ И ОФД
-					{
-						Title:  "Связь и ОФД",
-						Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 8},
-						Children: []d.Widget{
-							d.GroupBox{
-								Title:  "ОФД и ОИСМ (Адрес:Порт)",
-								Layout: d.Grid{Columns: 2, Spacing: 8},
-								Children: []d.Widget{
-									d.Label{Text: "Сервер ОФД:"}, d.LineEdit{Text: d.Bind("OfdString")},
-									d.Label{Text: "Сервер ОИСМ:"}, d.LineEdit{Text: d.Bind("OismString")},
-								},
-							},
-							d.Composite{
-								Layout: d.HBox{MarginsZero: true, Spacing: 10, Alignment: d.AlignHNearVNear},
-								Children: []d.Widget{
-									// ОФД Доп (Слева)
-									d.GroupBox{
-										Title:         "Настройки клиента",
-										StretchFactor: 1,
-										Layout:        d.Grid{Columns: 2, Spacing: 6},
-										Children: []d.Widget{
-											d.Label{Text: "Режим:"},
-											d.ComboBox{
-												Value:                 d.Bind("OfdClient"),
-												BindingMember:         "Code",
-												DisplayMember:         "Name",
-												Model:                 listClients,
-												OnCurrentIndexChanged: checkOfdClientChange,
-											},
-											d.Label{Text: "Имя клиента:"}, d.LineEdit{Text: d.Bind("OfdClient"), ReadOnly: true},
-											d.Label{Text: "Таймер ФН:"}, d.NumberEdit{Value: d.Bind("TimerFN"), MaxSize: d.Size{Width: 50}},
-											d.Label{Text: "Таймер ОФД:"}, d.NumberEdit{Value: d.Bind("TimerOFD"), MaxSize: d.Size{Width: 50}},
-										},
-									},
-									// LAN (Справа)
-									d.GroupBox{
-										Title:         "Настройки сети (LAN)",
-										StretchFactor: 1,
-										Layout:        d.Grid{Columns: 2, Spacing: 6},
-										Children: []d.Widget{
-											d.Label{Text: "IP:"}, d.LineEdit{Text: d.Bind("LanAddr")},
-											d.Label{Text: "Mask:"}, d.LineEdit{Text: d.Bind("LanMask")},
-											d.Label{Text: "GW:"}, d.LineEdit{Text: d.Bind("LanGw")},
-											d.Label{Text: "Port:"}, d.NumberEdit{Value: d.Bind("LanPort")},
-										},
-									},
-								},
-							},
-							d.Composite{
-								Layout: d.HBox{Alignment: d.AlignHCenterVCenter},
-								Children: []d.Widget{
-									d.PushButton{Text: "Прочитать настройки", OnClicked: func() { onReadOfdSettings(); onReadOismSettings(); onReadLanSettings() }},
-									d.PushButton{Text: "Записать настройки", OnClicked: func() { onWriteOfdSettings(); onWriteOismSettings(); onWriteLanSettings() }},
-								},
-							},
-						},
-					},
-
-					// 2. ПАРАМЕТРЫ
+					// 1. ПАРАМЕТРЫ
 					{
 						Title:  "Параметры",
-						Layout: d.VBox{Margins: d.Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}, Spacing: 6},
+						Layout: d.VBox{Margins: d.Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}, Spacing: 3},
 						Children: []d.Widget{
-							d.Composite{
-								Layout: d.HBox{MarginsZero: true, Spacing: 6, Alignment: d.AlignHNearVNear},
-								Children: []d.Widget{
-
-									// Группа 1: Железо
-									d.GroupBox{
-										Title:         "Принтер и Бумага",
-										StretchFactor: 1,
-										Layout:        d.Grid{Columns: 2, Spacing: 4},
-										Children: []d.Widget{
-											d.Label{Text: "Скорость:"},
-											d.ComboBox{Value: d.Bind("PrintBaud"), BindingMember: "Code", DisplayMember: "Name", Model: listBaud},
-											d.Label{Text: "Ширина:"}, d.NumberEdit{Value: d.Bind("PrintPaper")},
-											d.Label{Text: "Шрифт:"}, d.NumberEdit{Value: d.Bind("PrintFont")},
-											d.Label{Text: "Час. пояс:"},
-											d.ComboBox{Value: d.Bind("OptTimezone"), BindingMember: "Code", DisplayMember: "Name", Model: listTimezones},
-											d.Label{Text: "Авто-отрез:", MinSize: d.Size{Width: 60}}, d.CheckBox{Checked: d.Bind("OptCut")},
-											d.Label{Text: "Звук бумаги:"}, d.CheckBox{Checked: d.Bind("OptNearEnd")},
-											d.Label{Text: "Авто-тест:"}, d.CheckBox{Checked: d.Bind("OptAutoTest")},
-										},
-									},
-
-									// Группа 2: Чеки и Опции
-									d.GroupBox{
-										Title:         "Вид чека и Опции",
-										StretchFactor: 1,
-										Layout:        d.Grid{Columns: 2, Spacing: 4},
-										Children: []d.Widget{
-											d.Label{Text: "QR Позиция:"},
-											d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos},
-
-											d.Label{Text: "Округление:"},
-											d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding},
-
-											d.Label{Text: "Ящик при:"},
-											d.ComboBox{Value: d.Bind("OptDrawerTrig"), BindingMember: "Code", DisplayMember: "Name", Model: listDrawerTrig},
-
-											d.Label{Text: "Текст у QR:"}, d.CheckBox{Checked: d.Bind("OptTextQR")},
-											d.Label{Text: "Кол. покупок:"}, d.CheckBox{Checked: d.Bind("OptCountInCheck")},
-											d.Label{Text: "Опция b9 (СНО):"}, d.LineEdit{Text: d.Bind("OptB9"), MaxLength: 3, ToolTipText: "Сумма: СНО(1-8) + X-отчет(16)"},
-										},
-									},
-								},
-							},
-
-							// Группа 3: Денежный ящик (Импульсы)
+							// --- Блок 1: ОФД и Сеть ---
 							d.GroupBox{
-								Title:  "Настройки Денежного Ящика (Импульс)",
-								Layout: d.HBox{Spacing: 10},
+								Title:  "ОФД и Часовой пояс",
+								Layout: d.HBox{Alignment: d.AlignHNearVNear, Spacing: 3},
 								Children: []d.Widget{
-									d.Label{Text: "PIN:"}, d.NumberEdit{Value: d.Bind("DrawerPin"), MaxSize: d.Size{Width: 40}},
-									d.Label{Text: "Rise (ms):"}, d.NumberEdit{Value: d.Bind("DrawerRise"), MaxSize: d.Size{Width: 50}},
-									d.Label{Text: "Fall (ms):"}, d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 50}},
+									// Колонка 1: Адреса ОФД и Часовой пояс
+									d.Composite{
+										Layout: d.Grid{Columns: 2, Spacing: 3},
+										Children: []d.Widget{
+											d.Label{AssignTo: &st.ofdStringLabel, Text: "Адрес ОФД:", ToolTipText: "Адрес ОФД в формате URL:PORT"},
+											d.LineEdit{Text: d.Bind("OfdString"), MaxSize: d.Size{Width: 80}, OnTextChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.oismStringLabel, Text: "Адрес ОИСМ:", ToolTipText: "Адрес ОИСМ в формате URL:PORT"},
+											d.LineEdit{Text: d.Bind("OismString"), MaxSize: d.Size{Width: 80}, OnTextChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.optTimezoneLabel, Text: "Часовой пояс:"},
+											d.ComboBox{
+												Value: d.Bind("OptTimezone"), BindingMember: "Code", DisplayMember: "Name", Model: listTimezones,
+												MinSize: d.Size{Width: 80}, OnCurrentIndexChanged: st.updateChangeTracking,
+											},
+										},
+									},
+									// Колонка 2: Клиент и Таймеры
+									d.Composite{
+										Layout: d.Grid{Columns: 2, Spacing: 3},
+										Children: []d.Widget{
+											d.Label{AssignTo: &st.ofdClientLabel, Text: "Режим клиента ОФД:"},
+											d.ComboBox{
+												Value: d.Bind("OfdClient"), BindingMember: "Code", DisplayMember: "Name", Model: listClients,
+												MinSize: d.Size{Width: 100}, OnCurrentIndexChanged: func() { st.checkOfdClientChange(); st.updateChangeTracking() },
+											},
+
+											d.Label{AssignTo: &st.timerFNLabel, Text: "Таймер ФН:"},
+											d.NumberEdit{Value: d.Bind("TimerFN"), MaxSize: d.Size{Width: 60}, OnValueChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.timerOFDLabel, Text: "Таймер ОФД:"},
+											d.NumberEdit{Value: d.Bind("TimerOFD"), MaxSize: d.Size{Width: 60}, OnValueChanged: st.updateChangeTracking},
+										},
+									},
+									// Колонка 3: LAN (Справа)
+									d.Composite{
+										Layout: d.Grid{Columns: 2, Spacing: 3},
+										Children: []d.Widget{
+											d.Label{AssignTo: &st.lanAddrLabel, Text: "IP LAN:"},
+											d.LineEdit{Text: d.Bind("LanAddr"), MinSize: d.Size{Width: 100}, OnTextChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.lanMaskLabel, Text: "Mask LAN:"},
+											d.LineEdit{Text: d.Bind("LanMask"), MinSize: d.Size{Width: 100}, OnTextChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.lanGwLabel, Text: "GW LAN:"},
+											d.LineEdit{Text: d.Bind("LanGw"), MinSize: d.Size{Width: 100}, OnTextChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.lanPortLabel, Text: "Port LAN:"},
+											d.NumberEdit{Value: d.Bind("LanPort"), MaxSize: d.Size{Width: 60}, OnValueChanged: st.updateChangeTracking},
+										},
+									},
 								},
 							},
 
-							d.Composite{
-								Layout: d.HBox{Alignment: d.AlignHCenterVCenter},
+							// --- Блок 2: Настройки устройства ---
+							d.GroupBox{
+								Title:  "Настройки устройства",
+								Layout: d.HBox{Alignment: d.AlignHNearVNear, Spacing: 2},
 								Children: []d.Widget{
-									d.PushButton{Text: "Прочитать всё", OnClicked: readAllParameters},
-									d.PushButton{Text: "Записать всё", OnClicked: onWriteAllParameters},
+									// Колонка 1: Принтер
+									d.GroupBox{
+										Title:  "Принтер",
+										Layout: d.Grid{Columns: 4, Spacing: 3},
+										Children: []d.Widget{
+											d.Label{AssignTo: &st.printModelLabel, Text: "Printer:", ToolTipText: "Модель принтера"},
+											d.ComboBox{Value: d.Bind("PrintModel"), MaxSize: d.Size{Width: 60}, BindingMember: "Code", DisplayMember: "Name", Model: listModels, OnCurrentIndexChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.optCutLabel, Text: "Отрезчик:", ToolTipText: "Включить/выключить отрезку чеков"},
+											d.CheckBox{Checked: d.Bind("OptCut"), OnCheckStateChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.printBaudLabel, Text: "Baud:", ToolTipText: "Скорость принтера"},
+											d.ComboBox{Value: d.Bind("PrintBaud"), MaxSize: d.Size{Width: 60}, BindingMember: "Code", DisplayMember: "Name", Model: listBaud, OnCurrentIndexChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.optNearEndLabel, Text: "Near-end:", ToolTipText: "Сигнал скорого окончания бумаги"},
+											d.CheckBox{Checked: d.Bind("OptNearEnd"), OnCheckStateChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.printPaperLabel, Text: "Бумага:", ToolTipText: "Размер бумаги"},
+											d.ComboBox{Value: d.Bind("PrintPaper"), MaxSize: d.Size{Width: 60}, BindingMember: "Code", DisplayMember: "Name", Model: listPaper, OnCurrentIndexChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.optAutoTestLabel, Text: "Авто-тест:", ToolTipText: "Печать тестирования при запуске"},
+											d.CheckBox{Checked: d.Bind("OptAutoTest"), OnCheckStateChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.printFontLabel, Text: "Шрифт:", ToolTipText: "Номер шрифта. A - стандартный, B - компактный"},
+											d.ComboBox{Value: d.Bind("PrintFont"), MaxSize: d.Size{Width: 60}, BindingMember: "Code", DisplayMember: "Name", Model: listFonts, OnCurrentIndexChanged: st.updateChangeTracking},
+										},
+									},
+
+									// Колонка 2: Денежный ящик
+									d.GroupBox{
+										Title:  "Денежный ящик",
+										Layout: d.Grid{Columns: 2, Spacing: 3},
+										Children: []d.Widget{
+
+											d.Label{AssignTo: &st.optDrawerTrigLabel, Text: "Ящик:"},
+											d.ComboBox{Value: d.Bind("OptDrawerTrig"), MaxSize: d.Size{Width: 70}, BindingMember: "Code", DisplayMember: "Name", Model: listDrawerTrig, OnCurrentIndexChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.drawerPinLabel, Text: "PIN ящика:"},
+											d.NumberEdit{Value: d.Bind("DrawerPin"), MaxSize: d.Size{Width: 70}, OnValueChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.drawerRiseLabel, Text: "Rise ящика (ms):"},
+											d.NumberEdit{Value: d.Bind("DrawerRise"), MaxSize: d.Size{Width: 70}, OnValueChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.drawerFallLabel, Text: "Fall ящика (ms):"},
+											d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 70}, OnValueChanged: st.updateChangeTracking},
+										},
+									},
+
+									// Колонка 3: Форматирование и QR
+									d.Composite{
+										Layout: d.Grid{Columns: 1, Spacing: 1},
+										Children: []d.Widget{
+											d.Label{AssignTo: &st.optQRPosLabel, Text: "QR Позиция:"},
+											d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos, OnCurrentIndexChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.optTextQRLabel, Text: "Текст у QR:"},
+											d.CheckBox{Checked: d.Bind("OptTextQR"), OnCheckStateChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.optCountInCheckLabel, Text: "Количество покупок:"},
+											d.CheckBox{Checked: d.Bind("OptCountInCheck"), OnCheckStateChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.optRoundingLabel, Text: "Округление:"},
+											d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding, OnCurrentIndexChanged: st.updateChangeTracking},
+
+											d.Label{AssignTo: &st.optB9Label, Text: "Опция b9 (СНО):"},
+											d.LineEdit{Text: d.Bind("OptB9"), MaxLength: 3, MaxSize: d.Size{Width: 60}, ToolTipText: "Сумма: СНО(1-8) + X-отчет(16)", OnTextChanged: st.updateChangeTracking},
+										},
+									},
 								},
 							},
 						},
 					},
 
-					// 3. КЛИШЕ (Master-Detail Редактор)
+					// 2. КЛИШЕ
 					{
 						Title:  "Клише",
 						Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 5},
@@ -688,8 +722,8 @@ func GetServiceTab() d.TabPage {
 										BindingMember: "Code", DisplayMember: "Name",
 										MinSize: d.Size{Width: 200},
 									},
-									d.PushButton{Text: "Считать", OnClicked: onReadCliche},
-									d.PushButton{Text: "Записать", OnClicked: onWriteCliche},
+									d.PushButton{Text: "Считать", OnClicked: st.onReadCliche},
+									d.PushButton{Text: "Записать", OnClicked: st.onWriteCliche},
 								},
 							},
 
@@ -699,8 +733,8 @@ func GetServiceTab() d.TabPage {
 								Children: []d.Widget{
 									// Таблица (Список строк)
 									d.TableView{
-										AssignTo:         &clicheTable,
-										Model:            clicheModel,
+										AssignTo:         &st.clicheTable,
+										Model:            st.clicheModel,
 										AlternatingRowBG: true,
 										Columns: []d.TableViewColumn{
 											{Title: "#", Width: 30},
@@ -708,26 +742,25 @@ func GetServiceTab() d.TabPage {
 											{Title: "Текст", Width: 300},
 										},
 										MinSize:               d.Size{Width: 400, Height: 200},
-										OnCurrentIndexChanged: onClicheSelectionChanged,
+										OnCurrentIndexChanged: st.onClicheSelectionChanged,
 									},
 
 									// Редактор выбранной строки
 									d.GroupBox{
-										AssignTo: &clicheEditorGroup,
+										AssignTo: &st.clicheEditorGroup,
 										Title:    "Настройки строки",
 										Layout:   d.VBox{Margins: d.Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}, Spacing: 8},
-										Enabled:  false, // По умолчанию выключено
+										Enabled:  false,
 										DataBinder: d.DataBinder{
-											AssignTo:   &clicheEditorBinder,
-											DataSource: serviceModel.CurrentClicheLine,
-											// OnChange удален, так как его не существует в d.DataBinder
+											AssignTo:   &st.clicheEditorBinder,
+											DataSource: st.viewModel.CurrentClicheLine,
 											AutoSubmit: true,
 										},
 										Children: []d.Widget{
 											d.Label{Text: "Текст:"},
 											d.LineEdit{
 												Text:          d.Bind("Text"),
-												OnTextChanged: onClicheItemChanged, // Отслеживаем изменение текста
+												OnTextChanged: func() { st.onClicheItemChanged(); st.updateChangeTracking() },
 											},
 
 											d.Composite{
@@ -739,7 +772,7 @@ func GetServiceTab() d.TabPage {
 														Model:                 listAlign,
 														BindingMember:         "Code",
 														DisplayMember:         "Name",
-														OnCurrentIndexChanged: onClicheItemChanged, // Отслеживаем выбор
+														OnCurrentIndexChanged: func() { st.onClicheItemChanged(); st.updateChangeTracking() },
 													},
 
 													d.Label{Text: "Шрифт:"},
@@ -748,7 +781,7 @@ func GetServiceTab() d.TabPage {
 														Model:                 listFonts,
 														BindingMember:         "Code",
 														DisplayMember:         "Name",
-														OnCurrentIndexChanged: onClicheItemChanged, // Отслеживаем выбор
+														OnCurrentIndexChanged: func() { st.onClicheItemChanged(); st.updateChangeTracking() },
 													},
 
 													d.Label{Text: "Подчеркивание:"},
@@ -757,7 +790,7 @@ func GetServiceTab() d.TabPage {
 														Model:                 listUnderline,
 														BindingMember:         "Code",
 														DisplayMember:         "Name",
-														OnCurrentIndexChanged: onClicheItemChanged, // Отслеживаем выбор
+														OnCurrentIndexChanged: func() { st.onClicheItemChanged(); st.updateChangeTracking() },
 													},
 												},
 											},
@@ -772,7 +805,7 @@ func GetServiceTab() d.TabPage {
 														MinValue:       0,
 														MaxValue:       8,
 														MaxSize:        d.Size{Width: 40},
-														OnValueChanged: onClicheItemChanged, // Отслеживаем число
+														OnValueChanged: func() { st.onClicheItemChanged(); st.updateChangeTracking() },
 													},
 													d.Label{Text: "Высота:"},
 													d.NumberEdit{
@@ -780,14 +813,14 @@ func GetServiceTab() d.TabPage {
 														MinValue:       0,
 														MaxValue:       8,
 														MaxSize:        d.Size{Width: 40},
-														OnValueChanged: onClicheItemChanged, // Отслеживаем число
+														OnValueChanged: func() { st.onClicheItemChanged(); st.updateChangeTracking() },
 													},
 												},
 											},
 											d.CheckBox{
 												Text:                "Инверсия (Белым по черному)",
 												Checked:             d.Bind("Invert"),
-												OnCheckStateChanged: func() { onClicheItemChanged() }, // Отслеживаем галочку
+												OnCheckStateChanged: func() { st.onClicheItemChanged(); st.updateChangeTracking() },
 											},
 										},
 									},
@@ -799,8 +832,8 @@ func GetServiceTab() d.TabPage {
 			},
 		},
 		DataBinder: d.DataBinder{
-			AssignTo:       &serviceBinder,
-			DataSource:     serviceModel,
+			AssignTo:       &st.binder,
+			DataSource:     st.viewModel,
 			ErrorPresenter: d.ToolTipErrorPresenter{},
 		},
 	}
@@ -810,173 +843,33 @@ func GetServiceTab() d.TabPage {
 // ЛОГИКА ИНТЕРФЕЙСА (Event Handlers)
 // -----------------------------
 
-func checkOfdClientChange() {
-	if isLoadingData {
+func (st *ServiceTab) checkOfdClientChange() {
+	if st.isLoadingData {
 		return
 	}
-	if serviceModel.OfdClient == "0" {
-		res := walk.MsgBox(mw, "Подтверждение",
+	if st.viewModel.OfdClient == "0" {
+		res := walk.MsgBox(st.app.MainWindow, "Подтверждение",
 			"Для использования встроенного клиента ОФД требуется подключение ФР к локальной сети (LAN).\n\nПодтверждаете переключение?",
 			walk.MsgBoxYesNo|walk.MsgBoxIconQuestion)
 
 		if res != walk.DlgCmdYes {
 			// Откат значения
-			serviceModel.OfdClient = "1"
+			st.viewModel.OfdClient = "1"
 			// Принудительно обновляем UI
-			if serviceBinder != nil {
-				serviceBinder.Reset()
+			if st.binder != nil {
+				st.binder.Reset()
 			}
 		}
 	}
 }
 
-// -----------------------------
-// ЛОГИКА ЗАПИСИ
-// -----------------------------
-
-func onWriteAllParameters() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	if err := serviceBinder.Submit(); err != nil {
-		return
-	}
-
-	baudRate, _ := strconv.Atoi(serviceModel.PrintBaud)
-	tz, _ := strconv.Atoi(serviceModel.OptTimezone)
-
-	go func() {
-		// 1. Принтер
-		drv.SetPrinterSettings(driver.PrinterSettings{
-			Model:    serviceModel.PrintModel,
-			BaudRate: baudRate,
-			Paper:    serviceModel.PrintPaper,
-			Font:     serviceModel.PrintFont,
-		})
-
-		// 2. Ящик
-		drv.SetMoneyDrawerSettings(driver.DrawerSettings{
-			Pin:  serviceModel.DrawerPin,
-			Rise: serviceModel.DrawerRise,
-			Fall: serviceModel.DrawerFall,
-		})
-
-		// 3. Timezone
-		drv.SetTimezone(tz)
-
-		// 4. Опции
-		if v, err := strconv.Atoi(serviceModel.OptQRPos); err == nil {
-			drv.SetOption(1, v)
-		}
-		if v, err := strconv.Atoi(serviceModel.OptRounding); err == nil {
-			drv.SetOption(2, v)
-		}
-
-		if serviceModel.OptCut {
-			drv.SetOption(3, 1)
-		} else {
-			drv.SetOption(3, 0)
-		}
-		if serviceModel.OptAutoTest {
-			drv.SetOption(4, 1)
-		} else {
-			drv.SetOption(4, 0)
-		}
-
-		if v, err := strconv.Atoi(serviceModel.OptDrawerTrig); err == nil {
-			drv.SetOption(5, v)
-		}
-
-		if serviceModel.OptNearEnd {
-			drv.SetOption(6, 1)
-		} else {
-			drv.SetOption(6, 0)
-		}
-		if serviceModel.OptTextQR {
-			drv.SetOption(7, 1)
-		} else {
-			drv.SetOption(7, 0)
-		}
-		if serviceModel.OptCountInCheck {
-			drv.SetOption(8, 1)
-		} else {
-			drv.SetOption(8, 0)
-		}
-		if v, err := strconv.Atoi(serviceModel.OptB9); err == nil {
-			drv.SetOption(9, v)
-		}
-
-		mw.Synchronize(func() {
-			walk.MsgBox(mw, "Успех", "Параметры отправлены", walk.MsgBoxIconInformation)
-		})
-	}()
-}
-
-func onWriteOfdSettings() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	serviceBinder.Submit()
-
-	h, p := splitHostPort(serviceModel.OfdString)
-
-	go func() {
-		err := drv.SetOfdSettings(driver.OfdSettings{
-			Addr:     h,
-			Port:     p,
-			Client:   serviceModel.OfdClient,
-			TimerFN:  serviceModel.TimerFN,
-			TimerOFD: serviceModel.TimerOFD,
-		})
-		if err == nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "OK", "ОФД записан", walk.MsgBoxIconInformation) })
-		}
-	}()
-}
-
-func onWriteOismSettings() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	serviceBinder.Submit()
-
-	h, p := splitHostPort(serviceModel.OismString)
-
-	go func() {
-		err := drv.SetOismSettings(driver.ServerSettings{Addr: h, Port: p})
-		if err == nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "OK", "ОИСМ записан", walk.MsgBoxIconInformation) })
-		}
-	}()
-}
-
-func onWriteLanSettings() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	serviceBinder.Submit()
-	go func() {
-		err := drv.SetLanSettings(driver.LanSettings{
-			Addr: serviceModel.LanAddr, Mask: serviceModel.LanMask, Port: serviceModel.LanPort,
-			Dns: serviceModel.LanDns, Gw: serviceModel.LanGw,
-		})
-		if err == nil {
-			mw.Synchronize(func() { walk.MsgBox(mw, "OK", "LAN записан", walk.MsgBoxIconInformation) })
-		}
-	}()
-}
-
-func onTechReset() {
-	drv := driver.Active
+func (st *ServiceTab) onTechReset() {
+	drv := st.app.GetDriver()
 	if drv == nil {
 		return
 	}
 
-	if walk.MsgBox(mw, "ВНИМАНИЕ",
+	if walk.MsgBox(st.app.MainWindow, "ВНИМАНИЕ",
 		"Выполнить ТЕХНОЛОГИЧЕСКОЕ ОБНУЛЕНИЕ?\nЭто может привести к сбросу настроек и потере данных в ОЗУ.",
 		walk.MsgBoxYesNo|walk.MsgBoxIconWarning) != walk.DlgCmdYes {
 		return
@@ -984,197 +877,669 @@ func onTechReset() {
 
 	go func() {
 		err := drv.TechReset()
-		mw.Synchronize(func() {
+		st.app.MainWindow.Synchronize(func() {
 			if err != nil {
-				walk.MsgBox(mw, "Ошибка", "Сбой тех. обнуления: "+err.Error(), walk.MsgBoxIconError)
+				walk.MsgBox(st.app.MainWindow, "Ошибка", "Сбой тех. обнуления: "+err.Error(), walk.MsgBoxIconError)
 			} else {
-				walk.MsgBox(mw, "Успех", "Технологическое обнуление выполнено.", walk.MsgBoxIconInformation)
+				walk.MsgBox(st.app.MainWindow, "Успех", "Технологическое обнуление выполнено.", walk.MsgBoxIconInformation)
 				// Перечитываем настройки, так как они сбросились
-				isLoadingData = true
-				readAllParameters()
-				readNetworkSettings()
-				isLoadingData = false
+				st.isLoadingData = true
+				st.readAllParameters()
+				st.readNetworkSettings()
+				st.isLoadingData = false
 			}
 		})
 	}()
 }
 
-func onSyncTime() {
-	drv := driver.Active
+func (st *ServiceTab) onSyncTime() {
+	drv := st.app.GetDriver()
 	if drv == nil {
 		return
 	}
 	now := time.Now()
 	go func() {
 		err := drv.SetDateTime(now)
-		mw.Synchronize(func() {
+		st.app.MainWindow.Synchronize(func() {
 			if err != nil {
-				walk.MsgBox(mw, "Ошибка", "Ошибка синхронизации: "+err.Error(), walk.MsgBoxIconError)
+				walk.MsgBox(st.app.MainWindow, "Ошибка", "Ошибка синхронизации: "+err.Error(), walk.MsgBoxIconError)
 			} else {
-				serviceModel.KktTimeStr = now.Format("02.01.2006 15:04:05")
-				serviceBinder.Reset()
-				walk.MsgBox(mw, "Успех", "Время синхронизировано.", walk.MsgBoxIconInformation)
+				st.viewModel.KktTimeStr = now.Format("02.01.2006 15:04:05")
+				st.binder.Reset()
+				walk.MsgBox(st.app.MainWindow, "Успех", "Время синхронизировано.", walk.MsgBoxIconInformation)
 			}
 		})
 	}()
 }
 
-func onRebootDevice() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	go func() {
-		drv.RebootDevice()
-		mw.Synchronize(func() {
-			walk.MsgBox(mw, "Инфо", "Команда перезагрузки отправлена", walk.MsgBoxIconInformation)
-		})
-	}()
-}
-
-func onOpenDrawer() {
-	drv := driver.Active
+func (st *ServiceTab) onOpenDrawer() {
+	drv := st.app.GetDriver()
 	if drv == nil {
 		return
 	}
 	go func() { drv.DeviceJob(2) }()
 }
 
-func onPrintXReport() {
-	drv := driver.Active
+func (st *ServiceTab) onPrintXReport() {
+	drv := st.app.GetDriver()
 	if drv == nil {
 		return
 	}
 	go func() { drv.PrintXReport() }()
 }
 
-func onMGMReset() {
-	drv := driver.Active
+func (st *ServiceTab) onMGMReset() {
+	drv := st.app.GetDriver()
 	if drv == nil {
 		return
 	}
 	go func() { drv.ResetMGM() }()
 }
 
-func onReadOfdSettings() {
-	mw.Synchronize(func() { isLoadingData = true })
-	readNetworkSettings()
-	mw.Synchronize(func() { isLoadingData = false })
-}
-func onReadOismSettings() { onReadOfdSettings() }
-func onReadLanSettings()  { onReadOfdSettings() }
-
-// -----------------------------
-// ЛОГИКА КЛИШЕ (НОВАЯ)
-// -----------------------------
-
-// onReadCliche читает выбранный тип клише из ККТ
-func onReadCliche() {
-	drv := driver.Active
+func (st *ServiceTab) onFeedAndCut() {
+	drv := st.app.GetDriver()
 	if drv == nil {
-		walk.MsgBox(mw, "Ошибка", "Нет подключения", walk.MsgBoxIconError)
+		return
+	}
+	go func() {
+		drv.Feed(20)
+		drv.Cut()
+	}()
+}
+
+func (st *ServiceTab) onReadCliche() {
+	drv := st.app.GetDriver()
+	if drv == nil {
+		walk.MsgBox(st.app.MainWindow, "Ошибка", "Нет подключения", walk.MsgBoxIconError)
 		return
 	}
 
-	typeID, _ := strconv.Atoi(serviceModel.SelectedClicheType)
+	typeID, _ := strconv.Atoi(st.viewModel.SelectedClicheType)
 
 	go func() {
 		lines, err := drv.GetHeader(typeID)
 		if err != nil {
-			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка чтения клише: %v", err), walk.MsgBoxIconError)
+			st.app.MainWindow.Synchronize(func() {
+				walk.MsgBox(st.app.MainWindow, "Ошибка", fmt.Sprintf("Ошибка чтения клише: %v", err), walk.MsgBoxIconError)
 			})
 			return
 		}
 
-		mw.Synchronize(func() {
+		st.app.MainWindow.Synchronize(func() {
 			// Заполняем модель
 			for i := 0; i < 10; i++ {
 				if i < len(lines) {
-					serviceModel.ClicheItems[i].Text = lines[i].Text
-					serviceModel.ClicheItems[i].Format = lines[i].Format
+					st.viewModel.ClicheItems[i].Text = lines[i].Text
+					st.viewModel.ClicheItems[i].Format = lines[i].Format
 				} else {
-					serviceModel.ClicheItems[i].Text = ""
-					serviceModel.ClicheItems[i].Format = "000000"
+					st.viewModel.ClicheItems[i].Text = ""
+					st.viewModel.ClicheItems[i].Format = "000000"
 				}
-				// Парсим формат для редактора
-				serviceModel.ClicheItems[i].ParseFormatString()
+				st.viewModel.ClicheItems[i].ParseFormatString()
 			}
-			// Обновляем таблицу
-			clicheModel.PublishRowsReset()
-			// Если что-то выбрано, обновляем редактор
-			idx := clicheTable.CurrentIndex()
+			st.clicheModel.PublishRowsReset()
+			idx := st.clicheTable.CurrentIndex()
 			if idx >= 0 {
-				reloadEditor(idx)
+				st.reloadEditor(idx)
 			}
 		})
 	}()
 }
 
-// onWriteCliche записывает текущее состояние таблицы в ККТ
-func onWriteCliche() {
-	drv := driver.Active
+func (st *ServiceTab) onWriteCliche() {
+	drv := st.app.GetDriver()
 	if drv == nil {
 		return
 	}
 
-	typeID, _ := strconv.Atoi(serviceModel.SelectedClicheType)
+	typeID, _ := strconv.Atoi(st.viewModel.SelectedClicheType)
 
-	// Подготавливаем данные
 	var linesToWrite []struct{ txt, fmt string }
-	for _, item := range serviceModel.ClicheItems {
-		// Убедимся, что формат актуален
+	for _, item := range st.viewModel.ClicheItems {
 		item.UpdateFormatString()
 		linesToWrite = append(linesToWrite, struct{ txt, fmt string }{item.Text, item.Format})
 	}
 
 	go func() {
 		for i, l := range linesToWrite {
-			// i = номер строки (0..9)
-			// l.fmt уже "xxxxxx"
 			if err := drv.SetHeaderLine(typeID, i, l.txt, l.fmt); err != nil {
-				// Логируем или игнорируем
 				fmt.Printf("Error writing line %d: %v\n", i, err)
 			}
 		}
-		mw.Synchronize(func() {
-			walk.MsgBox(mw, "Успех", "Клише записано", walk.MsgBoxIconInformation)
+		st.app.MainWindow.Synchronize(func() {
+			walk.MsgBox(st.app.MainWindow, "Успех", "Клише записано", walk.MsgBoxIconInformation)
 		})
 	}()
 }
 
-// onClicheSelectionChanged вызывается при клике на строку таблицы
-func onClicheSelectionChanged() {
-	idx := clicheTable.CurrentIndex()
+func (st *ServiceTab) onClicheSelectionChanged() {
+	idx := st.clicheTable.CurrentIndex()
 	if idx < 0 {
-		clicheEditorGroup.SetEnabled(false)
+		st.clicheEditorGroup.SetEnabled(false)
 		return
 	}
-	reloadEditor(idx)
+	st.reloadEditor(idx)
 }
 
-// reloadEditor перепривязывает редактор к выбранной строке
-func reloadEditor(idx int) {
-	// 1. Берем указатель на реальный объект из списка
-	item := serviceModel.ClicheItems[idx]
+func (st *ServiceTab) reloadEditor(idx int) {
+	item := st.viewModel.ClicheItems[idx]
+	st.clicheEditorBinder.SetDataSource(item)
+	st.clicheEditorBinder.Reset()
 
-	// 2. Подменяем DataSource у биндера редактора
-	// ВАЖНО: Мы меняем источник данных для binder'а на лету
-	clicheEditorBinder.SetDataSource(item)
-	clicheEditorBinder.Reset()
-
-	clicheEditorGroup.SetEnabled(true)
-	clicheEditorGroup.SetTitle(fmt.Sprintf("Настройки строки №%d", idx+1))
+	st.clicheEditorGroup.SetEnabled(true)
+	st.clicheEditorGroup.SetTitle(fmt.Sprintf("Настройки строки №%d", idx+1))
 }
 
-// onClicheItemChanged вызывается при любом изменении в полях редактора
-func onClicheItemChanged() {
-	// Принудительно обновляем форматную строку на основе полей
-	idx := clicheTable.CurrentIndex()
+func (st *ServiceTab) onClicheItemChanged() {
+	idx := st.clicheTable.CurrentIndex()
 	if idx >= 0 {
-		item := serviceModel.ClicheItems[idx]
+		item := st.viewModel.ClicheItems[idx]
 		item.UpdateFormatString()
-		// Уведомляем таблицу, что данные в этой строке изменились
-		clicheModel.PublishRowChanged(idx)
+		st.clicheModel.PublishRowChanged(idx)
+	}
+}
+
+func (st *ServiceTab) onActionButtonClicked() {
+	if st.viewModel.OriginalSnapshot == nil {
+		st.app.MainWindow.Synchronize(func() { st.isLoadingData = true })
+		st.readNetworkSettings()
+		st.readAllParameters()
+		st.app.MainWindow.Synchronize(func() {
+			st.isLoadingData = false
+			st.viewModel.OriginalSnapshot = st.viewModel.CreateSnapshot()
+			st.isWriteMode = false
+			st.actionButton.SetText("Прочитать всё")
+		})
+		return
+	}
+
+	if !st.isWriteMode {
+		st.app.MainWindow.Synchronize(func() { st.isLoadingData = true })
+		st.readNetworkSettings()
+		st.readAllParameters()
+		st.app.MainWindow.Synchronize(func() {
+			st.isLoadingData = false
+			st.viewModel.OriginalSnapshot = st.viewModel.CreateSnapshot()
+			st.isWriteMode = false
+			st.actionButton.SetText("Прочитать всё")
+		})
+	} else {
+		newSnap := st.viewModel.CreateSnapshot()
+		changes := settings.CompareSnapshots(st.viewModel.OriginalSnapshot, newSnap)
+		if len(changes) == 0 {
+			return
+		}
+		confirmed, ok := RunSummaryDialog(st.app.MainWindow, changes)
+		if !ok {
+			return
+		}
+		go func() {
+			if st.performBatchWrite(confirmed) {
+				st.app.MainWindow.Synchronize(func() {
+					st.viewModel.OriginalSnapshot = st.viewModel.CreateSnapshot()
+					st.updateChangeTracking()
+				})
+			}
+		}()
+	}
+}
+
+func (st *ServiceTab) performBatchWrite(confirmed []*models.ChangeItem) bool {
+	drv := st.app.GetDriver()
+	if drv == nil {
+		st.app.MainWindow.Synchronize(func() {
+			walk.MsgBox(st.app.MainWindow, "Ошибка", "Нет подключения к устройству", walk.MsgBoxIconError)
+		})
+		return false
+	}
+	categoryChanges := make(map[string][]*models.ChangeItem)
+	for _, ch := range confirmed {
+		categoryChanges[ch.Category] = append(categoryChanges[ch.Category], ch)
+	}
+	var errors []string
+	if _, ok := categoryChanges["ОФД"]; ok {
+		h, p := splitHostPort(st.viewModel.OfdString)
+		err := drv.SetOfdSettings(driver.OfdSettings{
+			Addr: h, Port: p, Client: st.viewModel.OfdClient,
+			TimerFN: st.viewModel.TimerFN, TimerOFD: st.viewModel.TimerOFD,
+		})
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("Ошибка записи ОФД: %v", err))
+		}
+	}
+	if _, ok := categoryChanges["ОИСМ"]; ok {
+		h, p := splitHostPort(st.viewModel.OismString)
+		err := drv.SetOismSettings(driver.ServerSettings{Addr: h, Port: p})
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("Ошибка записи ОИСМ: %v", err))
+		}
+	}
+	if _, ok := categoryChanges["LAN"]; ok {
+		err := drv.SetLanSettings(driver.LanSettings{
+			Addr: st.viewModel.LanAddr, Mask: st.viewModel.LanMask,
+			Port: st.viewModel.LanPort, Dns: st.viewModel.LanDns, Gw: st.viewModel.LanGw,
+		})
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("Ошибка записи LAN: %v", err))
+		}
+	}
+	if _, ok := categoryChanges["Принтер"]; ok {
+		baudRate, _ := strconv.Atoi(st.viewModel.PrintBaud)
+		err := drv.SetPrinterSettings(driver.PrinterSettings{
+			Model: st.viewModel.PrintModel, BaudRate: baudRate,
+			Paper: st.viewModel.PrintPaper, Font: st.viewModel.PrintFont,
+		})
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("Ошибка записи принтера: %v", err))
+		}
+	}
+	if changes, ok := categoryChanges["Опции"]; ok {
+		for _, ch := range changes {
+			switch ch.Name {
+			case "Часовой пояс":
+				tz, _ := strconv.Atoi(st.viewModel.OptTimezone)
+				err := drv.SetTimezone(tz)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("Ошибка записи часового пояса: %v", err))
+				}
+			case "Автоотрез":
+				value := 0
+				if st.viewModel.OptCut {
+					value = 1
+				}
+				err := drv.SetOption(3, value)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("Ошибка записи автоотреза: %v", err))
+				}
+			case "Звук бумаги":
+				value := 0
+				if st.viewModel.OptNearEnd {
+					value = 1
+				}
+				err := drv.SetOption(6, value)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("Ошибка записи звука бумаги: %v", err))
+				}
+			case "Автотест":
+				value := 0
+				if st.viewModel.OptAutoTest {
+					value = 1
+				}
+				err := drv.SetOption(4, value)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("Ошибка записи автотеста: %v", err))
+				}
+			case "Позиция QR":
+				value, _ := strconv.Atoi(st.viewModel.OptQRPos)
+				err := drv.SetOption(1, value)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("Ошибка записи позиции QR: %v", err))
+				}
+			case "Округление":
+				value, _ := strconv.Atoi(st.viewModel.OptRounding)
+				err := drv.SetOption(2, value)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("Ошибка записи округления: %v", err))
+				}
+			case "Триггер ящика":
+				value, _ := strconv.Atoi(st.viewModel.OptDrawerTrig)
+				err := drv.SetOption(5, value)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("Ошибка записи триггера ящика: %v", err))
+				}
+			case "Текст у QR":
+				value := 0
+				if st.viewModel.OptTextQR {
+					value = 1
+				}
+				err := drv.SetOption(7, value)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("Ошибка записи текста у QR: %v", err))
+				}
+			case "Количество покупок":
+				value := 0
+				if st.viewModel.OptCountInCheck {
+					value = 1
+				}
+				err := drv.SetOption(8, value)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("Ошибка записи количества покупок: %v", err))
+				}
+			case "Опция b9":
+				value, _ := strconv.Atoi(st.viewModel.OptB9)
+				err := drv.SetOption(9, value)
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("Ошибка записи опции b9: %v", err))
+				}
+			}
+		}
+	}
+	if _, ok := categoryChanges["Денежный ящик"]; ok {
+		err := drv.SetMoneyDrawerSettings(driver.DrawerSettings{
+			Pin: st.viewModel.DrawerPin, Rise: st.viewModel.DrawerRise, Fall: st.viewModel.DrawerFall,
+		})
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("Ошибка записи денежного ящика: %v", err))
+		}
+	}
+	if changes, ok := categoryChanges["Клише"]; ok {
+		typeID, _ := strconv.Atoi(st.viewModel.SelectedClicheType)
+		for _, ch := range changes {
+			var lineNum int
+			n, err := fmt.Sscanf(ch.Name, "Строка %d", &lineNum)
+			if err != nil || n != 1 {
+				continue
+			}
+			lineNum--
+			if lineNum < 0 || lineNum >= len(st.viewModel.ClicheItems) {
+				continue
+			}
+			item := st.viewModel.ClicheItems[lineNum]
+			item.UpdateFormatString()
+			err = drv.SetHeaderLine(typeID, lineNum, item.Text, item.Format)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("Ошибка записи клише строки %d: %v", lineNum+1, err))
+			}
+		}
+	}
+	if len(errors) > 0 {
+		errorMsg := "Ошибки при записи:\n" + strings.Join(errors, "\n")
+		st.app.MainWindow.Synchronize(func() {
+			walk.MsgBox(st.app.MainWindow, "Ошибка", errorMsg, walk.MsgBoxIconError)
+		})
+		return false
+	}
+	st.app.MainWindow.Synchronize(func() {
+		walk.MsgBox(st.app.MainWindow, "Успех", "Изменения записаны успешно", walk.MsgBoxIconInformation)
+	})
+	return true
+}
+
+func (st *ServiceTab) updateChangeTracking() {
+	if st.isLoadingData || st.viewModel.OriginalSnapshot == nil {
+		return
+	}
+	if st.normalFont == nil {
+		var err error
+		st.normalFont, err = walk.NewFont("Segoe UI", 9, 0)
+		if err != nil {
+			return
+		}
+		st.boldFont, err = walk.NewFont("Segoe UI", 9, walk.FontBold)
+		if err != nil {
+			return
+		}
+	}
+	newSnap := st.viewModel.CreateSnapshot()
+	changes := settings.CompareSnapshots(st.viewModel.OriginalSnapshot, newSnap)
+	changedFields := make(map[string]bool)
+	for _, ch := range changes {
+		switch ch.Category {
+		case "ОФД":
+			if ch.Name == "Сервер" {
+				changedFields["OfdString"] = true
+			} else if ch.Name == "Режим клиента" {
+				changedFields["OfdClient"] = true
+			} else if ch.Name == "Таймер ФН" {
+				changedFields["TimerFN"] = true
+			} else if ch.Name == "Таймер ОФД" {
+				changedFields["TimerOFD"] = true
+			}
+		case "ОИСМ":
+			changedFields["OismString"] = true
+		case "LAN":
+			if ch.Name == "IP адрес" {
+				changedFields["LanAddr"] = true
+			} else if ch.Name == "Порт" {
+				changedFields["LanPort"] = true
+			} else if ch.Name == "Маска" {
+				changedFields["LanMask"] = true
+			} else if ch.Name == "DNS" {
+				changedFields["LanDns"] = true
+			} else if ch.Name == "Шлюз" {
+				changedFields["LanGw"] = true
+			}
+		case "Принтер":
+			if ch.Name == "Модель" {
+				changedFields["PrintModel"] = true
+			} else if ch.Name == "Скорость" {
+				changedFields["PrintBaud"] = true
+			} else if ch.Name == "Ширина бумаги" {
+				changedFields["PrintPaper"] = true
+			} else if ch.Name == "Шрифт" {
+				changedFields["PrintFont"] = true
+			}
+		case "Опции":
+			if ch.Name == "Часовой пояс" {
+				changedFields["OptTimezone"] = true
+			} else if ch.Name == "Автоотрез" {
+				changedFields["OptCut"] = true
+			} else if ch.Name == "Звук бумаги" {
+				changedFields["OptNearEnd"] = true
+			} else if ch.Name == "Автотест" {
+				changedFields["OptAutoTest"] = true
+			} else if ch.Name == "Позиция QR" {
+				changedFields["OptQRPos"] = true
+			} else if ch.Name == "Округление" {
+				changedFields["OptRounding"] = true
+			} else if ch.Name == "Триггер ящика" {
+				changedFields["OptDrawerTrig"] = true
+			} else if ch.Name == "Текст у QR" {
+				changedFields["OptTextQR"] = true
+			} else if ch.Name == "Количество покупок" {
+				changedFields["OptCountInCheck"] = true
+			} else if ch.Name == "Опция b9" {
+				changedFields["OptB9"] = true
+			}
+		case "Денежный ящик":
+			if ch.Name == "PIN" {
+				changedFields["DrawerPin"] = true
+			} else if ch.Name == "Rise (ms)" {
+				changedFields["DrawerRise"] = true
+			} else if ch.Name == "Fall (ms)" {
+				changedFields["DrawerFall"] = true
+			}
+		case "Клише":
+			changedFields["Cliche"] = true
+		}
+	}
+	if len(changes) > 0 {
+		st.isWriteMode = true
+		st.actionButton.SetText("Записать изменения")
+		st.actionButton.SetFont(st.boldFont)
+	} else {
+		st.isWriteMode = false
+		st.actionButton.SetText("Прочитать всё")
+		st.actionButton.SetFont(st.normalFont)
+	}
+	// Highlight labels
+	if st.ofdStringLabel != nil {
+		if changedFields["OfdString"] {
+			st.ofdStringLabel.SetFont(st.boldFont)
+		} else {
+			st.ofdStringLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.oismStringLabel != nil {
+		if changedFields["OismString"] {
+			st.oismStringLabel.SetFont(st.boldFont)
+		} else {
+			st.oismStringLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.lanAddrLabel != nil {
+		if changedFields["LanAddr"] {
+			st.lanAddrLabel.SetFont(st.boldFont)
+		} else {
+			st.lanAddrLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.lanMaskLabel != nil {
+		if changedFields["LanMask"] {
+			st.lanMaskLabel.SetFont(st.boldFont)
+		} else {
+			st.lanMaskLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.lanDnsLabel != nil {
+		if changedFields["LanDns"] {
+			st.lanDnsLabel.SetFont(st.boldFont)
+		} else {
+			st.lanDnsLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.lanGwLabel != nil {
+		if changedFields["LanGw"] {
+			st.lanGwLabel.SetFont(st.boldFont)
+		} else {
+			st.lanGwLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.lanPortLabel != nil {
+		if changedFields["LanPort"] {
+			st.lanPortLabel.SetFont(st.boldFont)
+		} else {
+			st.lanPortLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.ofdClientLabel != nil {
+		if changedFields["OfdClient"] {
+			st.ofdClientLabel.SetFont(st.boldFont)
+		} else {
+			st.ofdClientLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.timerFNLabel != nil {
+		if changedFields["TimerFN"] {
+			st.timerFNLabel.SetFont(st.boldFont)
+		} else {
+			st.timerFNLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.timerOFDLabel != nil {
+		if changedFields["TimerOFD"] {
+			st.timerOFDLabel.SetFont(st.boldFont)
+		} else {
+			st.timerOFDLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.printModelLabel != nil {
+		if changedFields["PrintModel"] {
+			st.printModelLabel.SetFont(st.boldFont)
+		} else {
+			st.printModelLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.printBaudLabel != nil {
+		if changedFields["PrintBaud"] {
+			st.printBaudLabel.SetFont(st.boldFont)
+		} else {
+			st.printBaudLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.printPaperLabel != nil {
+		if changedFields["PrintPaper"] {
+			st.printPaperLabel.SetFont(st.boldFont)
+		} else {
+			st.printPaperLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.printFontLabel != nil {
+		if changedFields["PrintFont"] {
+			st.printFontLabel.SetFont(st.boldFont)
+		} else {
+			st.printFontLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.optTimezoneLabel != nil {
+		if changedFields["OptTimezone"] {
+			st.optTimezoneLabel.SetFont(st.boldFont)
+		} else {
+			st.optTimezoneLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.optCutLabel != nil {
+		if changedFields["OptCut"] {
+			st.optCutLabel.SetFont(st.boldFont)
+		} else {
+			st.optCutLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.optNearEndLabel != nil {
+		if changedFields["OptNearEnd"] {
+			st.optNearEndLabel.SetFont(st.boldFont)
+		} else {
+			st.optNearEndLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.optAutoTestLabel != nil {
+		if changedFields["OptAutoTest"] {
+			st.optAutoTestLabel.SetFont(st.boldFont)
+		} else {
+			st.optAutoTestLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.optQRPosLabel != nil {
+		if changedFields["OptQRPos"] {
+			st.optQRPosLabel.SetFont(st.boldFont)
+		} else {
+			st.optQRPosLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.optRoundingLabel != nil {
+		if changedFields["OptRounding"] {
+			st.optRoundingLabel.SetFont(st.boldFont)
+		} else {
+			st.optRoundingLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.optDrawerTrigLabel != nil {
+		if changedFields["OptDrawerTrig"] {
+			st.optDrawerTrigLabel.SetFont(st.boldFont)
+		} else {
+			st.optDrawerTrigLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.optTextQRLabel != nil {
+		if changedFields["OptTextQR"] {
+			st.optTextQRLabel.SetFont(st.boldFont)
+		} else {
+			st.optTextQRLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.optCountInCheckLabel != nil {
+		if changedFields["OptCountInCheck"] {
+			st.optCountInCheckLabel.SetFont(st.boldFont)
+		} else {
+			st.optCountInCheckLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.optB9Label != nil {
+		if changedFields["OptB9"] {
+			st.optB9Label.SetFont(st.boldFont)
+		} else {
+			st.optB9Label.SetFont(st.normalFont)
+		}
+	}
+	if st.drawerPinLabel != nil {
+		if changedFields["DrawerPin"] {
+			st.drawerPinLabel.SetFont(st.boldFont)
+		} else {
+			st.drawerPinLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.drawerRiseLabel != nil {
+		if changedFields["DrawerRise"] {
+			st.drawerRiseLabel.SetFont(st.boldFont)
+		} else {
+			st.drawerRiseLabel.SetFont(st.normalFont)
+		}
+	}
+	if st.drawerFallLabel != nil {
+		if changedFields["DrawerFall"] {
+			st.drawerFallLabel.SetFont(st.boldFont)
+		} else {
+			st.drawerFallLabel.SetFont(st.normalFont)
+		}
 	}
 }

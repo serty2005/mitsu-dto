@@ -96,34 +96,3 @@ func SendFirstUnsentDocument(drv driver.Driver) (*OfdTransferResult, error) {
 
 	return result, nil
 }
-
-// RefreshFnInfo обновляет информацию о ФН в модели регистрации
-func RefreshFnInfo(drv driver.Driver) error {
-	if drv == nil {
-		return fmt.Errorf("нет подключения к ККТ")
-	}
-
-	fnStatus, err := drv.GetFnStatus()
-	if err != nil {
-		return fmt.Errorf("ошибка чтения статуса ФН: %w", err)
-	}
-
-	// Обновляем модель
-	regModel.FnNumber = fnStatus.Serial
-	regModel.FnValidDate = fnStatus.Valid
-	regModel.FnPhase = fnStatus.Phase
-
-	phaseText, phaseColor := decodeFnPhase(fnStatus.Phase)
-	regModel.FnPhaseText = phaseText
-	regModel.FnPhaseColor = phaseColor
-
-	// Обновляем UI
-	if regBinder != nil {
-		regBinder.Reset()
-	}
-	if fnPhaseLabel != nil {
-		fnPhaseLabel.SetTextColor(phaseColor)
-	}
-
-	return nil
-}

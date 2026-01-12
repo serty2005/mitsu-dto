@@ -94,7 +94,8 @@ func runNetworkScan() {
 
 	mw.Synchronize(func() {
 		if len(foundList) > 0 {
-			newList := getInitialDeviceList()
+			// ИСПРАВЛЕНИЕ: Передаем mainApp в getInitialDeviceList
+			newList := getInitialDeviceList(mainApp)
 			searchItem := newList[len(newList)-1]
 			newList = newList[:len(newList)-1]
 			newList = append(newList, foundList...)

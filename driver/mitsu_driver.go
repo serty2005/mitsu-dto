@@ -154,9 +154,57 @@ func (d *mitsuDriver) sendCommand(xmlCmd string) ([]byte, error) {
 	return nil, lastErr
 }
 
+func (d *mitsuDriver) sendCommandSilent(xmlCmd string) ([]byte, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Попытки нужны в основном для COM порта или если TCP моргнул
+	attempts := 1
+	if d.config.ConnectionType == 0 {
+		attempts = 2
+	}
+
+	var lastErr error
+
+	for i := 0; i < attempts; i++ {
+		// 1. Проверяем состояние драйвера
+		if d.config.ConnectionType == 0 && d.port == nil {
+			if err := d.connectLocked(); err != nil {
+				lastErr = err
+				continue
+			}
+		}
+
+		// 2. Обмен
+		resp, err := d.performExchangeInternal(xmlCmd, false)
+		if err == nil {
+			return resp, nil
+		}
+
+		lastErr = err
+
+		// 3. Retry логика (только для COM)
+		if d.config.ConnectionType == 0 && i < attempts-1 {
+			if d.config.Logger != nil {
+				d.config.Logger(fmt.Sprintf("COM Error (%v). Retrying...", err))
+			}
+			d.disconnectLocked()
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+	}
+
+	return nil, lastErr
+}
+
 // performExchange выполняет физическую отправку и прием данных
 func (d *mitsuDriver) performExchange(xmlCmd string) ([]byte, error) {
-	if d.config.Logger != nil {
+	return d.performExchangeInternal(xmlCmd, true)
+}
+
+// performExchangeInternal выполняет физическую отправку и прием данных
+func (d *mitsuDriver) performExchangeInternal(xmlCmd string, logEnabled bool) ([]byte, error) {
+	if logEnabled && d.config.Logger != nil {
 		d.config.Logger(fmt.Sprintf(">> TX: %s", xmlCmd))
 	}
 
@@ -327,14 +375,14 @@ func (d *mitsuDriver) performExchange(xmlCmd string) ([]byte, error) {
 
 	// 4. Проверка на логические ошибки
 	if bytes.Contains(responseData, []byte("ERROR")) {
-		if d.config.Logger != nil {
+		if logEnabled && d.config.Logger != nil {
 			decodedLog, _ := toUTF8(responseData)
 			d.config.Logger(fmt.Sprintf("<< RX (ERR): %s", string(decodedLog)))
 		}
 		return nil, parseError(responseData)
 	}
 
-	if d.config.Logger != nil {
+	if logEnabled && d.config.Logger != nil {
 		decodedLog, _ := toUTF8(responseData)
 		d.config.Logger(fmt.Sprintf("<< RX: %s", string(decodedLog)))
 	}

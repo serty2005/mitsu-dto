@@ -13,12 +13,17 @@ import (
 	"go.bug.st/serial"
 
 	"mitsuscanner/driver"
+	"mitsuscanner/internal/app"
+	"mitsuscanner/internal/models"
 )
 
 // Global state
 var (
+	// mw остается глобальным только для вспомогательных функций (logMsg, и т.д.),
+	// но контроллеры получают доступ через app.App.
 	mw      *walk.MainWindow
 	logView *walk.TextEdit
+	mainApp *app.App
 
 	// Элементы управления
 	addrCombo        *walk.ComboBox   // Строка подключения (Умный комбобокс)
@@ -47,15 +52,21 @@ const (
 	defaultBaud   = 115200
 )
 
-func RunApp() error {
+func RunApp(appInstance *app.App) error {
+	mainApp = appInstance
+
 	// Загружаем профили подключений перед формированием UI
-	if err := LoadProfiles(); err != nil {
+	if err := appInstance.Storage.LoadProfiles(); err != nil {
 		log.Printf("[GUI] Ошибка загрузки профилей при старте: %v", err)
 	}
 
-	mw = new(walk.MainWindow)
+	// Инициализация контроллеров вкладок
+	// ВАЖНО: MainWindow в appInstance еще nil, но контроллеры это учитывают в своих горутинах
+	serviceTab := NewServiceTab(appInstance)
+	regTab := NewRegistrationTab(appInstance)
+
 	err := d.MainWindow{
-		AssignTo: &mw,
+		AssignTo: &mw, // Walk запишет сюда указатель на СОЗДАННОЕ окно
 		Title:    "Mitsu Driver Utility",
 		Size:     d.Size{Width: 600, Height: 600},
 		MinSize:  d.Size{Width: 600, Height: 500},
@@ -73,7 +84,7 @@ func RunApp() error {
 							d.ComboBox{
 								AssignTo:              &addrCombo,
 								Editable:              true,
-								Model:                 getInitialDeviceList(),
+								Model:                 getInitialDeviceList(appInstance),
 								CurrentIndex:          0,
 								OnCurrentIndexChanged: onDeviceSelectionChanged,
 								OnTextChanged:         onDeviceTextChanged,
@@ -83,7 +94,7 @@ func RunApp() error {
 							d.PushButton{
 								AssignTo:  &actionBtn,
 								Text:      "Подключить",
-								OnClicked: onActionBtnClicked,
+								OnClicked: func() { onActionBtnClicked(appInstance) },
 								MinSize:   d.Size{Width: 90},
 							},
 							d.PushButton{
@@ -91,7 +102,7 @@ func RunApp() error {
 								Text:        "🗑️",
 								MaxSize:     d.Size{Width: 30},
 								ToolTipText: "Очистить сохранённые профили",
-								OnClicked:   onClearProfiles,
+								OnClicked:   func() { onClearProfiles(appInstance) },
 							},
 						},
 					},
@@ -149,7 +160,7 @@ func RunApp() error {
 											d.PushButton{Text: "X-Отчет", OnClicked: onPrintX, MinSize: d.Size{Width: 120}},
 											d.PushButton{Text: "Копия док.", OnClicked: onPrintCopy, MinSize: d.Size{Width: 120}},
 											d.PushButton{Text: "Z-Отчет", OnClicked: onPrintZ, MinSize: d.Size{Width: 120}},
-											d.PushButton{Text: "Прогон/Отрезка", OnClicked: onFeedAndCut, MinSize: d.Size{Width: 120}},
+											d.PushButton{Text: "Перезагрузка", OnClicked: onRebootDeviceMain, MinSize: d.Size{Width: 120}},
 										},
 									},
 								},
@@ -157,9 +168,9 @@ func RunApp() error {
 						},
 					},
 					// 2. Регистрация
-					GetRegistrationTab(),
+					regTab.Create(),
 					// 3. Сервис
-					GetServiceTab(),
+					serviceTab.Create(),
 				},
 			},
 
@@ -185,15 +196,19 @@ func RunApp() error {
 		return err
 	}
 
+	// КРИТИЧНО: Присваиваем созданное окно в appInstance ТОЛЬКО СЕЙЧАС
+	appInstance.MainWindow = mw
+
 	// Автовыбор первого профиля при старте
 	if addrCombo.Model() != nil {
 		onDeviceSelectionChanged()
 	}
 
 	mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
-		if driver.Active != nil {
-			_ = driver.Active.Disconnect()
-			driver.Active = nil
+		drv := mainApp.GetDriver()
+		if drv != nil {
+			_ = drv.Disconnect()
+			mainApp.SetDriver(nil)
 		}
 	})
 
@@ -204,13 +219,16 @@ func RunApp() error {
 // --- Логика UI ---
 
 // getInitialDeviceList формирует список
-func getInitialDeviceList() []string {
+func getInitialDeviceList(appInstance *app.App) []string {
 	var items []string
+	var profiles []*models.ConnectionProfile
 
 	// 1. Профили
-	profiles := GetProfiles()
-	for _, p := range profiles {
-		items = append(items, p.DisplayString())
+	if appInstance != nil && appInstance.Storage != nil {
+		profiles = GetProfiles(appInstance.Storage)
+		for _, p := range profiles {
+			items = append(items, p.DisplayString())
+		}
 	}
 
 	// 2. COM-порты (чистые)
@@ -228,7 +246,7 @@ func getInitialDeviceList() []string {
 	return items
 }
 
-func isPortInProfiles(port string, profiles []*ConnectionProfile) bool {
+func isPortInProfiles(port string, profiles []*models.ConnectionProfile) bool {
 	for _, p := range profiles {
 		if p.ConnectionType == 0 && p.ComName == port {
 			return true
@@ -237,17 +255,17 @@ func isPortInProfiles(port string, profiles []*ConnectionProfile) bool {
 	return false
 }
 
-func refreshDeviceList() {
+func refreshDeviceList(appInstance *app.App) {
 	mw.Synchronize(func() {
-		addrCombo.SetModel(getInitialDeviceList())
-		if addrCombo.CurrentIndex() < 0 && len(getInitialDeviceList()) > 0 {
+		addrCombo.SetModel(getInitialDeviceList(appInstance))
+		if addrCombo.CurrentIndex() < 0 && len(getInitialDeviceList(appInstance)) > 0 {
 			addrCombo.SetCurrentIndex(0)
 		}
 	})
 }
 
 // onConnectSuccess - действия после успешного соединения
-func onConnectSuccess(drv driver.Driver, cfg driver.Config) {
+func onConnectSuccess(drv driver.Driver, cfg driver.Config, appInstance *app.App) {
 	logMsg("[SYSTEM] Подключение установлено. Чтение информации...")
 
 	// 1. Читаем статику (Модель, Версия, SN)
@@ -263,7 +281,7 @@ func onConnectSuccess(drv driver.Driver, cfg driver.Config) {
 	logMsg("[INFO] %s, SN: %s, FW: %s", model, serial, ver)
 
 	// 2. Сохраняем профиль
-	profile := &ConnectionProfile{
+	profile := &models.ConnectionProfile{
 		SerialNumber:   serial,
 		ConnectionType: int(cfg.ConnectionType),
 		ComName:        cfg.ComName,
@@ -275,58 +293,45 @@ func onConnectSuccess(drv driver.Driver, cfg driver.Config) {
 		LastUsed:       time.Now(),
 	}
 	go func() {
-		UpsertProfile(profile)
-		mw.Synchronize(func() { refreshDeviceList() })
+		UpsertProfile(appInstance.Storage, profile)
+		mw.Synchronize(func() { refreshDeviceList(appInstance) })
 	}()
 
 	// 3. УСТАНОВКА ФЛАГА ПИТАНИЯ
-	// Устанавливаем 1 (TRUE), чтобы обозначить "Мы контролируем ситуацию".
-	// Если ККТ перезагрузится, она (вероятно) сбросит флаг в 0.
 	if err := drv.SetPowerFlag(1); err != nil {
 		logMsg("[WARN] Не удалось установить флаг питания: %v", err)
-	} else {
-		// Не пишем в лог, чтобы не шуметь, или пишем только в DEBUG
-		// logMsg("[SYSTEM] Флаг питания установлен (1).")
 	}
 
-	// 4. Запускаем мониторинг (передаем статику)
+	// 4. Запускаем мониторинг
 	StartMonitor(drv, model, serial, unsent)
 	SetUpdateCallback(updateKktInfoPanel)
 
 	// 5. Показываем панель
 	mw.Synchronize(func() {
-		// Первичное заполнение лейблов
 		modelLabel.SetText(model)
 		serialLabel.SetText("SN: " + serial)
 		unsentDocsLabel.SetText(fmt.Sprintf("ОФД: %d", unsent))
-		rebootIndicator.SetTextColor(walk.RGB(0, 200, 0)) // Зеленый по умолчанию при успехе
+		rebootIndicator.SetTextColor(walk.RGB(0, 200, 0))
 		kktInfoComposite.SetVisible(true)
 	})
 }
 
-func updateKktInfoPanel(status *KktPanelStatus) {
+func updateKktInfoPanel(status *models.KktStatus) {
 	mw.Synchronize(func() {
-		// Обновляем только индикатор перезагрузки
-		// ЛОГИКА:
-		// PowerFlag == true (1) -> НОРМА (мы его сами поставили)
-		// PowerFlag == false (0) -> СБОЙ (устройство сбросилось)
-
 		if status.PowerFlag {
-			// НОРМА
 			rebootIndicator.SetText("⦿")
-			rebootIndicator.SetTextColor(walk.RGB(0, 200, 0)) // Зеленый
+			rebootIndicator.SetTextColor(walk.RGB(0, 200, 0))
 			rebootIndicator.SetToolTipText("Питание в норме")
 		} else {
-			// СБОЙ / ПЕРЕЗАГРУЗКА
 			rebootIndicator.SetText("○")
-			rebootIndicator.SetTextColor(walk.RGB(255, 0, 0)) // Красный
+			rebootIndicator.SetTextColor(walk.RGB(255, 0, 0))
 			rebootIndicator.SetToolTipText("ВНИМАНИЕ: Произошла перезагрузка ККТ!")
 		}
 	})
 }
 
 func onDeviceSelectionChanged() {
-	if driver.Active != nil {
+	if mainApp != nil && mainApp.GetDriver() != nil {
 		return
 	}
 	updateUIState()
@@ -336,20 +341,20 @@ func onDeviceTextChanged() {
 	updateUIState()
 }
 
-func onClearProfiles() {
+func onClearProfiles(appInstance *app.App) {
 	if walk.MsgBox(mw, "Подтверждение", "Очистить все профили?", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
 		return
 	}
 
 	actionBtn.SetEnabled(false)
 	go func() {
-		err := ClearProfiles()
+		err := ClearProfiles(appInstance.Storage)
 		mw.Synchronize(func() {
 			if err != nil {
 				walk.MsgBox(mw, "Ошибка", err.Error(), walk.MsgBoxIconError)
 			} else {
 				logMsg("Профили очищены.")
-				refreshDeviceList()
+				refreshDeviceList(appInstance)
 			}
 			updateUIState()
 		})
@@ -357,7 +362,7 @@ func onClearProfiles() {
 }
 
 func updateUIState() {
-	if driver.Active != nil {
+	if mainApp != nil && mainApp.GetDriver() != nil {
 		actionBtn.SetText("Отключить")
 		actionBtn.SetEnabled(true)
 		addrCombo.SetEnabled(false)
@@ -377,12 +382,9 @@ func updateUIState() {
 	actionBtn.SetEnabled(true)
 }
 
-// parseConnectionString разбирает "HOST:PORT" или "COMx:BAUD"
 func parseConnectionString(input string) (host string, port int, isCom bool) {
 	input = strings.TrimSpace(input)
 	isCom = strings.HasPrefix(strings.ToUpper(input), "COM")
-
-	// Если есть двоеточие - пытаемся разбить
 	if strings.Contains(input, ":") {
 		parts := strings.Split(input, ":")
 		host = parts[0]
@@ -394,8 +396,6 @@ func parseConnectionString(input string) (host string, port int, isCom bool) {
 	} else {
 		host = input
 	}
-
-	// Дефолты если порт не указан (или 0)
 	if port == 0 {
 		if isCom {
 			port = defaultBaud
@@ -403,26 +403,21 @@ func parseConnectionString(input string) (host string, port int, isCom bool) {
 			port = defaultPort
 		}
 	}
-
 	return host, port, isCom
 }
 
-// extractSNFromProfileString извлекает "SN123456" из строки отображения
 func extractSNFromProfileString(s string) string {
-	// Формат: SN123456 - ...
 	parts := strings.Split(s, " - ")
 	if len(parts) > 0 {
-		// Убираем префикс SN
 		return strings.TrimPrefix(parts[0], "SN")
 	}
 	return ""
 }
 
-func onActionBtnClicked() {
-	// 1. Отключение
-	if driver.Active != nil {
-		_ = driver.Active.Disconnect()
-		driver.Active = nil
+func onActionBtnClicked(appInstance *app.App) {
+	if drv := appInstance.GetDriver(); drv != nil {
+		_ = drv.Disconnect()
+		appInstance.SetDriver(nil)
 		StopMonitor()
 		kktInfoComposite.SetVisible(false)
 		updateUIState()
@@ -432,22 +427,19 @@ func onActionBtnClicked() {
 
 	rawText := strings.TrimSpace(addrCombo.Text())
 
-	// 2. Поиск
 	if actionBtn.Text() == "Искать" {
 		go runNetworkScan()
 		return
 	}
 
-	// 3. Подключение
 	cfg := driver.Config{
 		Timeout: 3000,
 		Logger:  func(s string) { logMsg(s) },
 	}
 
-	// СЦЕНАРИЙ А: Выбран профиль (строка начинается с SN...)
 	if strings.HasPrefix(rawText, "SN") {
 		sn := extractSNFromProfileString(rawText)
-		profile := FindProfile(sn)
+		profile := FindProfile(appInstance.Storage, sn)
 		if profile != nil {
 			logMsg("Подключение по профилю: %s...", profile.SerialNumber)
 			cfg.ConnectionType = int32(profile.ConnectionType)
@@ -459,7 +451,6 @@ func onActionBtnClicked() {
 				cfg.TCPPort = int32(profile.TCPPort)
 			}
 		} else {
-			// Если профиль не найден, пробуем парсить
 			logMsg("[WARN] Профиль не найден, пробуем парсить строку...")
 			h, p, isCom := parseConnectionString(rawText)
 			if isCom {
@@ -473,7 +464,6 @@ func onActionBtnClicked() {
 			}
 		}
 	} else {
-		// СЦЕНАРИЙ Б: Ручной ввод
 		h, p, isCom := parseConnectionString(rawText)
 		if isCom {
 			cfg.ConnectionType = 0
@@ -501,12 +491,13 @@ func onActionBtnClicked() {
 			return
 		}
 
+		appInstance.SetDriver(drv)
+
 		mw.Synchronize(func() {
-			driver.Active = drv
 			updateUIState()
 		})
 
-		onConnectSuccess(drv, cfg)
+		onConnectSuccess(drv, cfg, appInstance)
 		refreshInfo()
 	}()
 }
@@ -523,9 +514,11 @@ func getConnString(c *driver.Config) string {
 	return fmt.Sprintf("%s:%d", c.IPAddress, c.TCPPort)
 }
 
-// --- Утилиты ---
 func refreshInfo() {
-	drv := driver.Active
+	if mainApp == nil {
+		return
+	}
+	drv := mainApp.GetDriver()
 	if drv == nil {
 		return
 	}
@@ -540,11 +533,8 @@ func refreshInfo() {
 			return
 		}
 
-		type kv struct {
-			k, v string
-		}
+		type kv struct{ k, v string }
 		var lines []kv
-
 		lines = append(lines, kv{"Модель ККТ", info.ModelName})
 		lines = append(lines, kv{"Заводской номер", info.SerialNumber})
 		lines = append(lines, kv{"Версия прошивки", info.SoftwareDate})
@@ -569,7 +559,6 @@ func refreshInfo() {
 				ofdInfo += fmt.Sprintf(" (Первый: №%d от %s %s)", sh.Ofd.First, sh.Ofd.Date, sh.Ofd.Time)
 			}
 			lines = append(lines, kv{"Неотправленных ФД", ofdInfo})
-
 		} else {
 			lines = append(lines, kv{"Смена", "Ошибка получения статуса"})
 		}
@@ -582,51 +571,65 @@ func refreshInfo() {
 			}
 		}
 		maxKeyLen += 2
-
 		for _, item := range lines {
 			format := fmt.Sprintf("%%-%ds : %%s\r\n", maxKeyLen)
 			sb.WriteString(fmt.Sprintf(format, item.k, item.v))
 		}
-
-		mw.Synchronize(func() {
-			infoView.SetText(sb.String())
-		})
+		mw.Synchronize(func() { infoView.SetText(sb.String()) })
 	}()
 }
 
 func onPrintX() {
-	if driver.Active != nil {
-		go func() {
-			if err := driver.Active.PrintXReport(); err != nil {
-				logMsg("Error X: %v", err)
-			}
-		}()
+	if mainApp != nil {
+		if drv := mainApp.GetDriver(); drv != nil {
+			go func() {
+				if err := drv.PrintXReport(); err != nil {
+					logMsg("Error X: %v", err)
+				}
+			}()
+		}
 	}
 }
+
 func onPrintZ() {
-	if driver.Active != nil {
+	if mainApp == nil {
+		return
+	}
+	drv := mainApp.GetDriver()
+	if drv != nil {
 		if walk.MsgBox(mw, "Подтверждение", "Закрыть смену?", walk.MsgBoxYesNo) == walk.DlgCmdYes {
 			go func() {
-				driver.Active.CloseShift("Admin")
+				drv.CloseShift("Admin")
 				time.Sleep(500 * time.Millisecond)
-				driver.Active.PrintLastDocument()
+				drv.PrintLastDocument()
 				refreshInfo()
 			}()
 		}
 	}
 }
+
 func onPrintCopy() {
-	if driver.Active != nil {
-		go driver.Active.PrintLastDocument()
+	if mainApp != nil {
+		if drv := mainApp.GetDriver(); drv != nil {
+			go drv.PrintLastDocument()
+		}
 	}
 }
-func onFeedAndCut() {
-	if driver.Active != nil {
-		go func() {
-			driver.Active.Feed(5)
-			driver.Active.Cut()
-		}()
+
+func onRebootDeviceMain() {
+	if mainApp == nil {
+		return
 	}
+	drv := mainApp.GetDriver()
+	if drv == nil {
+		return
+	}
+	go func() {
+		drv.RebootDevice()
+		mw.Synchronize(func() {
+			walk.MsgBox(mw, "Инфо", "Команда перезагрузки отправлена", walk.MsgBoxIconInformation)
+		})
+	}()
 }
 
 func logMsg(format string, args ...interface{}) {

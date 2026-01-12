@@ -1,15 +1,15 @@
 package gui
 
 import (
-	"context"
-	"log"
-	"sync"
 	"time"
 
 	"mitsuscanner/driver"
+	"mitsuscanner/internal/models"
+	"mitsuscanner/internal/service/monitor"
 )
 
 // KktPanelStatus содержит данные состояния для верхней панели
+// Используется для совместимости с существующим кодом GUI
 type KktPanelStatus struct {
 	ModelName    string    // Модель ККТ
 	SerialNumber string    // Серийный номер
@@ -18,140 +18,61 @@ type KktPanelStatus struct {
 	LastUpdate   time.Time // Время последнего обновления
 }
 
-// Глобальные переменные модуля
-var (
-	monitorCtx     context.Context
-	monitorCancel  context.CancelFunc
-	monitorMutex   sync.Mutex
-	panelStatus    = &KktPanelStatus{}
-	updateCallback func(*KktPanelStatus)
-	isPaused       bool
-)
+// Глобальная переменная сервиса мониторинга
+var monitorService *monitor.Service
 
-// StartMonitor запускает мониторинг.
+// StartMonitor запускает мониторинг через сервис
 func StartMonitor(drv driver.Driver, model, serial string, unsentDocs int) {
-	monitorMutex.Lock()
-	defer monitorMutex.Unlock()
-
-	// Если уже запущен - остановим
-	if monitorCancel != nil {
-		monitorCancel()
+	if monitorService != nil {
+		monitorService.Stop()
 	}
 
-	// Инициализация контекста
-	monitorCtx, monitorCancel = context.WithCancel(context.Background())
-
-	// Установка начального состояния
-	panelStatus.ModelName = model
-	panelStatus.SerialNumber = serial
-	panelStatus.UnsentDocs = unsentDocs
-	// Важно: Мы предполагаем, что при старте мониторинга мы уже установили флаг в 1 (TRUE).
-	// Поэтому начальное состояние = true (OK).
-	panelStatus.PowerFlag = true
-	panelStatus.LastUpdate = time.Now()
-
-	// Сразу обновляем UI начальными данными
-	if updateCallback != nil {
-		statusCopy := *panelStatus
-		go updateCallback(&statusCopy)
+	// Создаем начальное состояние
+	initialState := models.KktStatus{
+		ModelName:    model,
+		SerialNumber: serial,
+		UnsentDocs:   unsentDocs,
+		PowerFlag:    true, // Начальное состояние - OK
+		LastUpdate:   time.Now(),
 	}
 
-	// Запуск горутины мониторинга
-	go monitorRoutine(drv)
-	log.Printf("[MONITOR] Мониторинг ККТ запущен (Тихий режим)")
+	// Создаем конфиг
+	config := monitor.Config{
+		PollInterval: 3 * time.Second,
+		InitialState: initialState,
+	}
+
+	// Инициализируем сервис
+	monitorService = monitor.NewService(drv, config)
+
+	// Запускаем мониторинг
+	monitorService.Start()
 }
 
 // StopMonitor останавливает мониторинг
 func StopMonitor() {
-	monitorMutex.Lock()
-	defer monitorMutex.Unlock()
-
-	if monitorCancel != nil {
-		monitorCancel()
-		monitorCancel = nil
-		log.Printf("[MONITOR] Мониторинг ККТ остановлен")
+	if monitorService != nil {
+		monitorService.Stop()
 	}
 }
 
-// PauseMonitor приостанавливает мониторинг (для рег-запросов)
+// PauseMonitor приостанавливает мониторинг
 func PauseMonitor() {
-	monitorMutex.Lock()
-	defer monitorMutex.Unlock()
-	isPaused = true
+	if monitorService != nil {
+		monitorService.Pause()
+	}
 }
 
 // ResumeMonitor возобновляет мониторинг
 func ResumeMonitor() {
-	monitorMutex.Lock()
-	defer monitorMutex.Unlock()
-	isPaused = false
+	if monitorService != nil {
+		monitorService.Resume()
+	}
 }
 
 // SetUpdateCallback устанавливает callback для обновления UI
-func SetUpdateCallback(fn func(*KktPanelStatus)) {
-	monitorMutex.Lock()
-	defer monitorMutex.Unlock()
-	updateCallback = fn
-}
-
-// monitorRoutine - основная горутина мониторинга
-func monitorRoutine(drv driver.Driver) {
-	// Небольшая пауза перед началом опроса
-	time.Sleep(2 * time.Second)
-
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-monitorCtx.Done():
-			return
-
-		case <-ticker.C:
-			monitorMutex.Lock()
-			if isPaused {
-				monitorMutex.Unlock()
-				continue
-			}
-			monitorMutex.Unlock()
-
-			// Опрашиваем ТОЛЬКО флаг питания
-			checkPowerFlag(drv)
-		}
-	}
-}
-
-// checkPowerFlag проверяет только флаг питания
-func checkPowerFlag(drv driver.Driver) {
-	// Получаем текущий флаг питания из ККТ
-	// Если ККТ перезагрузилась, флаг сбросится в 0 (false).
-	// Если все ок, он останется 1 (true), который мы установили при подключении.
-	powerFlag, err := drv.GetPowerFlag()
-	if err != nil {
-		// Ошибки связи не логируем в основной лог, чтобы не спамить
-		// Можно добавить счетчик ошибок, если нужно
-		return
-	}
-
-	monitorMutex.Lock()
-	changed := powerFlag != panelStatus.PowerFlag
-	panelStatus.PowerFlag = powerFlag
-	panelStatus.LastUpdate = time.Now()
-	monitorMutex.Unlock()
-
-	// Если состояние изменилось, обновляем UI
-	if changed && updateCallback != nil {
-		monitorMutex.Lock()
-		statusCopy := *panelStatus
-		monitorMutex.Unlock()
-
-		// Логируем только событие смены статуса
-		if !statusCopy.PowerFlag {
-			log.Printf("[MONITOR] ВНИМАНИЕ: Обнаружена перезагрузка ККТ! (Флаг сброшен)")
-		} else {
-			log.Printf("[MONITOR] Питание восстановлено/подтверждено.")
-		}
-
-		go updateCallback(&statusCopy)
+func SetUpdateCallback(fn func(*models.KktStatus)) {
+	if monitorService != nil {
+		monitorService.SetUpdateCallback(fn)
 	}
 }
