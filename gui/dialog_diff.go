@@ -64,9 +64,8 @@ func RunDiffDialog(owner walk.Form, changes []service.Change) (bool, []service.C
 
 	// ХАК: Обработка правого клика вручную для удаления
 	// walk.TableView не имеет OnItemRightClicked в декларативном виде,
-	// используем MouseUp
 	tv.MouseUp().Attach(func(x, y int, button walk.MouseButton) {
-		if button == walk.MouseButton. {
+		if button == walk.RightButton {
 			// Определяем индекс строки под курсором
 			// К сожалению, walk не дает простого способа получить строку по координатам в public API без WinAPI.
 			// НО: Обычно правый клик выделяет строку. Попробуем взять CurrentIndex.

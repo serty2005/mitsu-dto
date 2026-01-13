@@ -24,6 +24,7 @@ type NV struct {
 }
 
 // Списки значений для выпадающих меню
+// Списки значений для выпадающих меню
 var (
 	// ОФД Клиент
 	listClients = []*NV{
@@ -38,8 +39,9 @@ var (
 	listModels = []*NV{
 		{"RP-809", "1"}, {"F80", "2"},
 	}
+	// Значения должны быть "80" и "57", а не индексы "0"/"1"
 	listPapers = []*NV{
-		{"80мм", "0"}, {"57мм", "1"},
+		{"80мм", "80"}, {"57мм", "57"},
 	}
 	// Позиция QR (b1)
 	listQRPos = []*NV{
@@ -61,7 +63,6 @@ var (
 		{"UTC+11 (Маг)", "11"}, {"UTC+12 (Кам)", "12"},
 	}
 
-	// --- Для КЛИШЕ ---
 	listClicheTypes = []*NV{
 		{"1 - Заголовок (Клише)", "1"},
 		{"2 - После пользователя", "2"},
@@ -78,7 +79,6 @@ var (
 		{"Нет", "0"}, {"Текст", "1"}, {"Вся строка", "2"},
 	}
 )
-
 // -----------------------------
 // МОДЕЛИ ДАННЫХ КЛИШЕ
 // -----------------------------
@@ -200,10 +200,11 @@ type ServiceViewModel struct {
 	LanGw   string
 
 	// --- Параметры (Оборудование и Опции) ---
+	// ВАЖНО: Все поля для ComboBox должны быть string, иначе DataBinder не выберет значение
 	PrintModel string // "1", "2"
 	PrintBaud  string // "115200"
-	PrintPaper int    // 57, 80
-	PrintFont  int    // 0, 1
+	PrintPaper string // "80", "57" (БЫЛО int, стало string)
+	PrintFont  string // "0", "1"   (БЫЛО int, стало string)
 
 	// Опции (b0-b9)
 	OptTimezone     string
@@ -217,7 +218,7 @@ type ServiceViewModel struct {
 	OptDrawerTrig   string
 	OptB9           string
 
-	// Денежный ящик
+	// Денежный ящик (остаются int, т.к. используются в NumberEdit)
 	DrawerPin  int
 	DrawerRise int
 	DrawerFall int
@@ -302,8 +303,7 @@ func joinHostPort(host string, port int) string {
 // -----------------------------
 
 // viewModelToSnapshot конвертирует текущую ViewModel в структуру Snapshot.
-// ВАЖНО: Для клише мы берем текущие данные из VM только для ТЕКУЩЕГО типа.
-// Остальные типы клише берем из currentSnapshot (чтобы сохранить их изменения).
+// viewModelToSnapshot конвертирует текущую ViewModel в структуру Snapshot.
 func viewModelToSnapshot(vm *ServiceViewModel) *service.SettingsSnapshot {
 	s := service.NewSettingsSnapshot()
 
@@ -331,13 +331,16 @@ func viewModelToSnapshot(vm *ServiceViewModel) *service.SettingsSnapshot {
 	s.Timezone, _ = strconv.Atoi(vm.OptTimezone)
 
 	// 5. Printer
+	// Преобразуем строки из UI обратно в int для драйвера
 	baud, _ := strconv.Atoi(vm.PrintBaud)
+	paper, _ := strconv.Atoi(vm.PrintPaper)
+	font, _ := strconv.Atoi(vm.PrintFont)
+
 	s.Printer = driver.PrinterSettings{
 		Model:    vm.PrintModel,
 		BaudRate: baud,
-		Paper:    vm.PrintPaper,
-		Font:     vm.PrintFont,
-		// Ширина/Высота не редактируются в UI, можно опустить или брать дефолт
+		Paper:    paper,
+		Font:     font,
 	}
 
 	// 6. Drawer
@@ -361,20 +364,18 @@ func viewModelToSnapshot(vm *ServiceViewModel) *service.SettingsSnapshot {
 	s.Options = opts
 
 	// 8. Cliches
-	// Сначала копируем всё, что было в предыдущем состоянии
 	if currentSnapshot != nil {
 		for k, v := range currentSnapshot.Cliches {
-			// Deep copy slice
 			dst := make([]driver.ClicheLineData, len(v))
 			copy(dst, v)
 			s.Cliches[k] = dst
 		}
 	}
-	// Теперь обновляем ТЕКУЩИЙ редактируемый тип из VM
+
 	curType, _ := strconv.Atoi(vm.SelectedClicheType)
 	var lines []driver.ClicheLineData
 	for _, item := range vm.ClicheItems {
-		item.UpdateFormatString() // Убедимся что формат свежий
+		item.UpdateFormatString()
 		lines = append(lines, driver.ClicheLineData{
 			Text:   item.Text,
 			Format: item.Format,
@@ -435,55 +436,76 @@ func recalcChanges() {
 	})
 }
 
-// highlightLabels проходит по списку изменений и делает лейблы жирными
+// highlightLabels проходит по списку изменений и делает начертание лейблов жирным.
 func highlightLabels(changes []service.Change) {
-	// Карта соответствия ID изменения из service/comparator.go к Label в UI.
-	labelMap := map[string]*walk.Label{
-		"Printer":         sLabels.PrinterModel, // Подсвечиваем модель как общий индикатор изменений принтера
-		"Drawer":          sLabels.DrawerPin,    // Подсвечиваем PIN как общий индикатор изменений денежного ящика
-		"Timezone":        sLabels.Timezone,
-		"OptQRPos":        sLabels.OptQRPos,
-		"OptRounding":     sLabels.OptRounding,
-		"OptCut":          sLabels.PrinterCut,
-		"OptAutoTest":     sLabels.PrinterTest,
-		"OptDrawerTrig":   sLabels.DrawerTrig,
-		"OptNearEnd":      sLabels.PrinterSound, // Датчик бумаги
-		"OptTextQR":       sLabels.OptTextQR,
-		"OptCountInCheck": sLabels.OptCount,
-		"OptB9":           sLabels.OptB9,
-		"OFD":             sLabels.OfdAddr, // Подсвечиваем адрес ОФД как общий индикатор изменений ОФД
-		"OISM":            sLabels.OismAddr,
-		"LAN":             sLabels.LanIp, // Подсвечиваем IP LAN как общий индикатор изменений LAN
+	// Карта соответствия атомарных ID из компаратора к лейблам в UI.
+	// Используем **walk.Label, так как переменные в sLabels инициализируются декларативно.
+	labelMap := map[string][]**walk.Label{
+		"Printer_Model":    {&sLabels.PrinterModel},
+		"Printer_Baud":     {&sLabels.PrinterBaud},
+		"Printer_Paper":    {&sLabels.PrinterPaper},
+		"Printer_Font":     {&sLabels.PrinterFont},
+		"Drawer_Settings":  {&sLabels.DrawerPin, &sLabels.DrawerRise, &sLabels.DrawerFall},
+		"Timezone":         {&sLabels.Timezone},
+		"Opt_QRPos":        {&sLabels.OptQRPos},
+		"Opt_Rounding":     {&sLabels.OptRounding},
+		"Opt_Cut":          {&sLabels.PrinterCut},
+		"Opt_AutoTest":     {&sLabels.PrinterTest},
+		"Opt_DrawerTrig":   {&sLabels.DrawerTrig},
+		"Opt_NearEnd":      {&sLabels.PrinterSound},
+		"Opt_TextQR":       {&sLabels.OptTextQR},
+		"Opt_CountInCheck": {&sLabels.OptCount},
+		"Opt_B9":           {&sLabels.OptB9},
+		"Ofd_Addr":         {&sLabels.OfdAddr},
+		"Ofd_Client":       {&sLabels.OfdClient},
+		"Ofd_Timers":       {&sLabels.TimerFN, &sLabels.TimerOFD},
+		"Oism_Addr":        {&sLabels.OismAddr},
+		"Lan_Settings":     {&sLabels.LanIp, &sLabels.LanMask, &sLabels.LanGw, &sLabels.LanPort},
 	}
 
-	// Создаем шрифты для обычного и жирного текста.
-	// Используем "Segoe UI" как стандартный шрифт для Windows, размер 9.
-	// Эти шрифты будут созданы один раз и переиспользованы.
-	normalFont, _ := walk.NewFont("Segoe UI", 9, 0)           // Обычный шрифт
-	boldFont, _ := walk.NewFont("Segoe UI", 9, walk.FontBold) // Жирный шрифт
+	// Функция-помощник для смены начертания без изменения размера и шрифта
+	setBold := func(lbPtr **walk.Label, bold bool) {
+		if lbPtr == nil || *lbPtr == nil {
+			return
+		}
+		lbl := *lbPtr
+		f := lbl.Font()
+		style := walk.FontStyle(0)
+		if bold {
+			style = walk.FontBold
+		}
 
-	// Сброс всех подсвеченных лейблов к обычному шрифту.
-	// Проходим по всем лейблам, которые могут быть подсвечены, и устанавливаем им обычный шрифт.
-	for _, lbl := range labelMap {
-		if lbl != nil {
-			lbl.SetFont(normalFont)
+		// Создаем новый шрифт, сохраняя Family и PointSize
+		newFont, err := walk.NewFont(f.Family(), f.PointSize(), style)
+		if err == nil {
+			lbl.SetFont(newFont)
 		}
 	}
 
-	// Отдельно сброс для заголовка клише, так как его ID динамический.
+	// 1. Сначала сбрасываем все лейблы в обычное начертание
+	for _, labels := range labelMap {
+		for _, lblPtr := range labels {
+			setBold(lblPtr, false)
+		}
+	}
 	if sLabels.ClicheHeader != nil {
-		sLabels.ClicheHeader.SetFont(normalFont)
+		setBold(&sLabels.ClicheHeader, false)
 	}
 
-	// Применяем жирный шрифт к лейблам, соответствующим измененным параметрам.
+	// 2. Устанавливаем жирное начертание для измененных параметров
 	for _, ch := range changes {
-		if lbl, ok := labelMap[ch.ID]; ok && lbl != nil {
-			lbl.SetFont(boldFont)
-		}
-		// Обработка клише (ID начинается с Cliche_)
+		// Обработка клише (динамический ID)
 		if len(ch.ID) > 7 && ch.ID[:7] == "Cliche_" {
-			if sLabels.ClicheHeader != nil { // Проверяем, что лейбл инициализирован
-				sLabels.ClicheHeader.SetFont(boldFont)
+			if sLabels.ClicheHeader != nil {
+				setBold(&sLabels.ClicheHeader, true)
+			}
+			continue
+		}
+
+		// Остальные параметры по карте
+		if labels, ok := labelMap[ch.ID]; ok {
+			for _, lblPtr := range labels {
+				setBold(lblPtr, true)
 			}
 		}
 	}
@@ -509,7 +531,6 @@ func loadServiceInitial() {
 	}()
 }
 
-// onReadAllSettings считывает ВСЕ параметры и создает initialSnapshot
 func onReadAllSettings() {
 	drv := driver.Active
 	if drv == nil {
@@ -517,62 +538,44 @@ func onReadAllSettings() {
 			serviceModel.KktTimeStr = "Нет подключения"
 			serviceModel.PcTimeStr = time.Now().Format("02.01.2006 15:04:05")
 			serviceBinder.Reset()
-			btnServiceAction.SetText("Считать")
+			btnServiceAction.SetText("Считать настройки")
 		})
 		return
 	}
 
 	mw.Synchronize(func() {
+		// Блокируем триггеры изменений на время загрузки
 		isLoadingData = true
-		btnServiceAction.SetEnabled(false) // Блокируем на время чтения
+		btnServiceAction.SetEnabled(false)
 		btnServiceAction.SetText("Чтение...")
 	})
 
 	go func() {
-		defer mw.Synchronize(func() {
-			isLoadingData = false
-			btnServiceAction.SetEnabled(true)   // Разблокируем
-			btnServiceAction.SetText("Считать") // Сброс текста
-
-			// После загрузки обновляем UI и снапшоты
-			serviceBinder.Reset()
-
-			// Пересоздаем начальный снапшот на основе только что загруженных данных
-			initialSnapshot = viewModelToSnapshot(serviceModel)
-			// Текущий = Начальный
-			currentSnapshot = viewModelToSnapshot(serviceModel)
-
-			// Сбрасываем изменения
-			currentChanges = nil
-			recalcChanges()
-
-			// Если клише таблица была выбрана, обновляем её
-			onClicheSelectionChanged()
-		})
-
-		// 1. Время
-		t, err := drv.GetDateTime()
-		mw.Synchronize(func() {
-			if err == nil {
-				serviceModel.KktTimeStr = t.Format("02.01.2006 15:04:05")
-			} else {
-				serviceModel.KktTimeStr = "Ошибка"
-			}
-		})
-
-		// 2. Сеть и ОФД
+		// Читаем всё из ККТ (время, настройки, клише)
+		t, _ := drv.GetDateTime()
 		ofd, _ := drv.GetOfdSettings()
 		oism, _ := drv.GetOismSettings()
 		lan, _ := drv.GetLanSettings()
-
-		// 3. Параметры
 		prn, _ := drv.GetPrinterSettings()
 		cd, _ := drv.GetMoneyDrawerSettings()
 		opts, _ := drv.GetOptions()
 		tz, _ := drv.GetTimezone()
 
+		allCliches := make(map[int][]driver.ClicheLineData)
+		for i := 1; i <= 4; i++ {
+			lines, err := drv.GetHeader(i)
+			if err == nil {
+				allCliches[i] = lines
+			}
+		}
+
 		mw.Synchronize(func() {
-			// Заполняем ViewModel
+			// 1. Обновляем модель времени
+			if !t.IsZero() {
+				serviceModel.KktTimeStr = t.Format("02.01.2006 15:04:05")
+			}
+
+			// 2. Обновляем основные поля в ViewModel
 			if ofd != nil {
 				serviceModel.OfdString = joinHostPort(ofd.Addr, ofd.Port)
 				serviceModel.OfdClient = ofd.Client
@@ -592,8 +595,8 @@ func onReadAllSettings() {
 			if prn != nil {
 				serviceModel.PrintModel = prn.Model
 				serviceModel.PrintBaud = strconv.Itoa(prn.BaudRate)
-				serviceModel.PrintPaper = prn.Paper
-				serviceModel.PrintFont = prn.Font
+				serviceModel.PrintPaper = strconv.Itoa(prn.Paper)
+				serviceModel.PrintFont = strconv.Itoa(prn.Font)
 			}
 			if cd != nil {
 				serviceModel.DrawerPin = cd.Pin
@@ -612,21 +615,8 @@ func onReadAllSettings() {
 				serviceModel.OptCountInCheck = (opts.B8 == 1)
 				serviceModel.OptB9 = fmt.Sprintf("%d", opts.B9)
 			}
-		})
 
-		// 4. Клише (ВСЕ ТИПЫ)
-		// Для снапшота нам нужно прочитать все 4 типа клише, чтобы иметь базу для сравнения.
-		// Это может занять время.
-		allCliches := make(map[int][]driver.ClicheLineData)
-		for i := 1; i <= 4; i++ {
-			lines, err := drv.GetHeader(i)
-			if err == nil {
-				allCliches[i] = lines
-			}
-		}
-
-		mw.Synchronize(func() {
-			// Обновляем текущее отображаемое клише в VM
+			// 3. Обновляем клише (текущий выбранный тип)
 			curType, _ := strconv.Atoi(serviceModel.SelectedClicheType)
 			lines := allCliches[curType]
 			for i := 0; i < 10; i++ {
@@ -641,23 +631,26 @@ func onReadAllSettings() {
 			}
 			clicheModel.PublishRowsReset()
 
-			// ВАЖНО: Формируем полный снапшот вручную.
-			// viewModelToSnapshot берет данные из VM, но клише там только одного типа.
-			// Нам нужно внедрить туда все прочитанные клише (allCliches).
+			// 4. Синхронизируем UI с обновленной моделью
+			serviceBinder.Reset()
 
-			// 1. Создаем снапшот из текущей VM (тут будет только 1 тип клише)
+			// 5. СОЗДАЕМ ИДЕНТИЧНЫЕ СНАПШОТЫ
+			// Сначала формируем Snapshot из того, что только что записали в VM
 			tempSnap := viewModelToSnapshot(serviceModel)
-
-			// 2. Подменяем карту клише на полную, которую мы только что вычитали
+			// Добавляем в него все вычитанные типы клише (не только текущий)
 			tempSnap.Cliches = allCliches
 
-			// 3. Сохраняем как начальное и текущее состояние
 			initialSnapshot = tempSnap
 			currentSnapshot = tempSnap
-
-			// Сбрасываем изменения (так как мы только что считали данные)
 			currentChanges = nil
-			recalcChanges()
+
+			// 6. Снимаем блокировку и обновляем состояние кнопки
+			isLoadingData = false
+			btnServiceAction.SetEnabled(true)
+			btnServiceAction.SetText("Считать настройки")
+
+			// Принудительно сбрасываем подсветку
+			highlightLabels(nil)
 		})
 	}()
 }
@@ -738,8 +731,8 @@ func GetServiceTab() d.TabPage {
 	serviceModel = &ServiceViewModel{
 		PrintModel:         "1",
 		PrintBaud:          "115200",
-		PrintPaper:         80,
-		PrintFont:          0,
+		PrintPaper:         "80",
+		PrintFont:          "0",
 		DrawerPin:          5,
 		DrawerRise:         100,
 		DrawerFall:         100,
