@@ -2,13 +2,15 @@ package gui
 
 import (
 	"fmt"
-	"mitsuscanner/driver"
 	"net"
 	"strconv"
 	"time"
 
 	"github.com/lxn/walk"
 	d "github.com/lxn/walk/declarative"
+
+	"mitsuscanner/driver"
+	"mitsuscanner/internal/service"
 )
 
 // -----------------------------
@@ -203,7 +205,7 @@ type ServiceViewModel struct {
 	PrintPaper int    // 57, 80
 	PrintFont  int    // 0, 1
 
-	// Опции (b0..b9)
+	// Опции (b0-b9)
 	OptTimezone     string
 	OptCut          bool
 	OptAutoTest     bool
@@ -220,15 +222,39 @@ type ServiceViewModel struct {
 	DrawerRise int
 	DrawerFall int
 
-	// --- Клише (Новая структура) ---
+	// --- Клише ---
 	SelectedClicheType string        // "1".."4"
 	ClicheItems        []*ClicheItem // 10 строк
 	CurrentClicheLine  *ClicheItem   // Указатель на редактируемую строку
 }
 
+// ServiceLabels хранит ссылки на лейблы для выделения жирным шрифтом
+type ServiceLabels struct {
+	// Printer
+	PrinterModel, PrinterBaud, PrinterPaper, PrinterFont, PrinterCut, PrinterSound, PrinterTest *walk.Label
+	// Drawer
+	DrawerPin, DrawerRise, DrawerFall, DrawerTrig *walk.Label
+	// Network
+	OfdAddr, OfdClient, TimerFN, TimerOFD, OismAddr, Timezone *walk.Label
+	LanIp, LanMask, LanGw, LanPort                            *walk.Label
+	// Options
+	OptQRPos, OptTextQR, OptCount, OptRounding, OptB9 *walk.Label
+	// Cliche
+	ClicheHeader *walk.Label
+}
+
 var (
 	serviceModel  *ServiceViewModel
-	serviceBinder *walk.DataBinder // Биндинг основной вкладки
+	serviceBinder *walk.DataBinder
+	sLabels       ServiceLabels
+
+	// Глобальные снапшоты состояния
+	initialSnapshot *service.SettingsSnapshot
+	currentSnapshot *service.SettingsSnapshot
+	currentChanges  []service.Change
+
+	// Элементы управления
+	btnServiceAction *walk.PushButton
 
 	// Элементы для прямого доступа (Время)
 	kktTimeLabel *walk.Label
@@ -245,7 +271,7 @@ var (
 	clicheTable        *walk.TableView
 	clicheModel        *ClicheModel
 	clicheEditorGroup  *walk.GroupBox
-	clicheEditorBinder *walk.DataBinder // Биндинг панели редактирования
+	clicheEditorBinder *walk.DataBinder
 )
 
 // -----------------------------
@@ -272,12 +298,204 @@ func joinHostPort(host string, port int) string {
 }
 
 // -----------------------------
+// ЛОГИКА СНАПШОТОВ И СРАВНЕНИЯ
+// -----------------------------
+
+// viewModelToSnapshot конвертирует текущую ViewModel в структуру Snapshot.
+// ВАЖНО: Для клише мы берем текущие данные из VM только для ТЕКУЩЕГО типа.
+// Остальные типы клише берем из currentSnapshot (чтобы сохранить их изменения).
+func viewModelToSnapshot(vm *ServiceViewModel) *service.SettingsSnapshot {
+	s := service.NewSettingsSnapshot()
+
+	// 1. ОФД
+	host, port := splitHostPort(vm.OfdString)
+	s.Ofd = driver.OfdSettings{
+		Addr:     host,
+		Port:     port,
+		Client:   vm.OfdClient,
+		TimerFN:  vm.TimerFN,
+		TimerOFD: vm.TimerOFD,
+	}
+
+	// 2. ОИСМ
+	hostO, portO := splitHostPort(vm.OismString)
+	s.Oism = driver.ServerSettings{Addr: hostO, Port: portO}
+
+	// 3. LAN
+	s.Lan = driver.LanSettings{
+		Addr: vm.LanAddr, Mask: vm.LanMask, Port: vm.LanPort,
+		Dns: vm.LanDns, Gw: vm.LanGw,
+	}
+
+	// 4. Timezone
+	s.Timezone, _ = strconv.Atoi(vm.OptTimezone)
+
+	// 5. Printer
+	baud, _ := strconv.Atoi(vm.PrintBaud)
+	s.Printer = driver.PrinterSettings{
+		Model:    vm.PrintModel,
+		BaudRate: baud,
+		Paper:    vm.PrintPaper,
+		Font:     vm.PrintFont,
+		// Ширина/Высота не редактируются в UI, можно опустить или брать дефолт
+	}
+
+	// 6. Drawer
+	s.Drawer = driver.DrawerSettings{
+		Pin:  vm.DrawerPin,
+		Rise: vm.DrawerRise,
+		Fall: vm.DrawerFall,
+	}
+
+	// 7. Options
+	opts := driver.DeviceOptions{}
+	opts.B1, _ = strconv.Atoi(vm.OptQRPos)
+	opts.B2, _ = strconv.Atoi(vm.OptRounding)
+	opts.B3 = boolToInt(vm.OptCut)
+	opts.B4 = boolToInt(vm.OptAutoTest)
+	opts.B5, _ = strconv.Atoi(vm.OptDrawerTrig)
+	opts.B6 = boolToInt(vm.OptNearEnd)
+	opts.B7 = boolToInt(vm.OptTextQR)
+	opts.B8 = boolToInt(vm.OptCountInCheck)
+	opts.B9, _ = strconv.Atoi(vm.OptB9)
+	s.Options = opts
+
+	// 8. Cliches
+	// Сначала копируем всё, что было в предыдущем состоянии
+	if currentSnapshot != nil {
+		for k, v := range currentSnapshot.Cliches {
+			// Deep copy slice
+			dst := make([]driver.ClicheLineData, len(v))
+			copy(dst, v)
+			s.Cliches[k] = dst
+		}
+	}
+	// Теперь обновляем ТЕКУЩИЙ редактируемый тип из VM
+	curType, _ := strconv.Atoi(vm.SelectedClicheType)
+	var lines []driver.ClicheLineData
+	for _, item := range vm.ClicheItems {
+		item.UpdateFormatString() // Убедимся что формат свежий
+		lines = append(lines, driver.ClicheLineData{
+			Text:   item.Text,
+			Format: item.Format,
+		})
+	}
+	s.Cliches[curType] = lines
+
+	return s
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func onServiceAction() {
+	if len(currentChanges) > 0 {
+		onWriteAllParameters()
+	} else {
+		onReadAllSettings()
+	}
+}
+
+// recalcChanges вызывается при любом изменении в UI
+func recalcChanges() {
+	if isLoadingData || serviceBinder == nil || initialSnapshot == nil {
+		return
+	}
+
+	// 1. Submit данных из UI в ViewModel
+	if err := serviceBinder.Submit(); err != nil {
+		// Ошибка валидации или биндинга, пока игнорируем
+		return
+	}
+
+	// 2. Обновляем текущий снапшот на основе VM
+	currentSnapshot = viewModelToSnapshot(serviceModel)
+
+	// 3. Сравниваем с начальным
+	currentChanges = service.Compare(initialSnapshot, currentSnapshot)
+
+	// 4. Обновляем UI кнопки
+	mw.Synchronize(func() {
+		count := len(currentChanges)
+		if count > 0 {
+			btnServiceAction.SetText(fmt.Sprintf("Записать (%d)", count))
+			// Можно добавить визуальный акцент, если нужно
+		} else {
+			btnServiceAction.SetText("Считать")
+		}
+		// Кнопка всегда активна, если мы не в процессе загрузки (isLoadingData)
+		btnServiceAction.SetEnabled(!isLoadingData)
+
+		// 5. Подсветка лейблов
+		highlightLabels(currentChanges)
+	})
+}
+
+// highlightLabels проходит по списку изменений и делает лейблы жирными
+func highlightLabels(changes []service.Change) {
+	// Карта соответствия ID изменения из service/comparator.go к Label в UI.
+	labelMap := map[string]*walk.Label{
+		"Printer":         sLabels.PrinterModel, // Подсвечиваем модель как общий индикатор изменений принтера
+		"Drawer":          sLabels.DrawerPin,    // Подсвечиваем PIN как общий индикатор изменений денежного ящика
+		"Timezone":        sLabels.Timezone,
+		"OptQRPos":        sLabels.OptQRPos,
+		"OptRounding":     sLabels.OptRounding,
+		"OptCut":          sLabels.PrinterCut,
+		"OptAutoTest":     sLabels.PrinterTest,
+		"OptDrawerTrig":   sLabels.DrawerTrig,
+		"OptNearEnd":      sLabels.PrinterSound, // Датчик бумаги
+		"OptTextQR":       sLabels.OptTextQR,
+		"OptCountInCheck": sLabels.OptCount,
+		"OptB9":           sLabels.OptB9,
+		"OFD":             sLabels.OfdAddr, // Подсвечиваем адрес ОФД как общий индикатор изменений ОФД
+		"OISM":            sLabels.OismAddr,
+		"LAN":             sLabels.LanIp, // Подсвечиваем IP LAN как общий индикатор изменений LAN
+	}
+
+	// Создаем шрифты для обычного и жирного текста.
+	// Используем "Segoe UI" как стандартный шрифт для Windows, размер 9.
+	// Эти шрифты будут созданы один раз и переиспользованы.
+	normalFont, _ := walk.NewFont("Segoe UI", 9, 0)           // Обычный шрифт
+	boldFont, _ := walk.NewFont("Segoe UI", 9, walk.FontBold) // Жирный шрифт
+
+	// Сброс всех подсвеченных лейблов к обычному шрифту.
+	// Проходим по всем лейблам, которые могут быть подсвечены, и устанавливаем им обычный шрифт.
+	for _, lbl := range labelMap {
+		if lbl != nil {
+			lbl.SetFont(normalFont)
+		}
+	}
+
+	// Отдельно сброс для заголовка клише, так как его ID динамический.
+	if sLabels.ClicheHeader != nil {
+		sLabels.ClicheHeader.SetFont(normalFont)
+	}
+
+	// Применяем жирный шрифт к лейблам, соответствующим измененным параметрам.
+	for _, ch := range changes {
+		if lbl, ok := labelMap[ch.ID]; ok && lbl != nil {
+			lbl.SetFont(boldFont)
+		}
+		// Обработка клише (ID начинается с Cliche_)
+		if len(ch.ID) > 7 && ch.ID[:7] == "Cliche_" {
+			if sLabels.ClicheHeader != nil { // Проверяем, что лейбл инициализирован
+				sLabels.ClicheHeader.SetFont(boldFont)
+			}
+		}
+	}
+}
+
+// -----------------------------
 // ЗАГРУЗКА ДАННЫХ
 // -----------------------------
 
 func loadServiceInitial() {
-	// Ждем инициализации окна
 	go func() {
+		// Ждем инициализации окна
 		for i := 0; i < 20; i++ {
 			if mw != nil && mw.Handle() != 0 {
 				break
@@ -287,16 +505,50 @@ func loadServiceInitial() {
 		if mw == nil {
 			return
 		}
+		onReadAllSettings()
+	}()
+}
 
-		drv := driver.Active
-		if drv == nil {
-			mw.Synchronize(func() {
-				serviceModel.KktTimeStr = "Нет подключения"
-				serviceModel.PcTimeStr = time.Now().Format("02.01.2006 15:04:05")
-				serviceBinder.Reset()
-			})
-			return
-		}
+// onReadAllSettings считывает ВСЕ параметры и создает initialSnapshot
+func onReadAllSettings() {
+	drv := driver.Active
+	if drv == nil {
+		mw.Synchronize(func() {
+			serviceModel.KktTimeStr = "Нет подключения"
+			serviceModel.PcTimeStr = time.Now().Format("02.01.2006 15:04:05")
+			serviceBinder.Reset()
+			btnServiceAction.SetText("Считать")
+		})
+		return
+	}
+
+	mw.Synchronize(func() {
+		isLoadingData = true
+		btnServiceAction.SetEnabled(false) // Блокируем на время чтения
+		btnServiceAction.SetText("Чтение...")
+	})
+
+	go func() {
+		defer mw.Synchronize(func() {
+			isLoadingData = false
+			btnServiceAction.SetEnabled(true)   // Разблокируем
+			btnServiceAction.SetText("Считать") // Сброс текста
+
+			// После загрузки обновляем UI и снапшоты
+			serviceBinder.Reset()
+
+			// Пересоздаем начальный снапшот на основе только что загруженных данных
+			initialSnapshot = viewModelToSnapshot(serviceModel)
+			// Текущий = Начальный
+			currentSnapshot = viewModelToSnapshot(serviceModel)
+
+			// Сбрасываем изменения
+			currentChanges = nil
+			recalcChanges()
+
+			// Если клише таблица была выбрана, обновляем её
+			onClicheSelectionChanged()
+		})
 
 		// 1. Время
 		t, err := drv.GetDateTime()
@@ -306,94 +558,108 @@ func loadServiceInitial() {
 			} else {
 				serviceModel.KktTimeStr = "Ошибка"
 			}
-			serviceBinder.Reset()
 		})
 
-		// 2. Остальные настройки
-		mw.Synchronize(func() { isLoadingData = true })
-		readNetworkSettings()
-		readAllParameters()
-		// Клише загружается отдельно по кнопке, но можно инициализировать модель пустыми
-		mw.Synchronize(func() { isLoadingData = false })
+		// 2. Сеть и ОФД
+		ofd, _ := drv.GetOfdSettings()
+		oism, _ := drv.GetOismSettings()
+		lan, _ := drv.GetLanSettings()
+
+		// 3. Параметры
+		prn, _ := drv.GetPrinterSettings()
+		cd, _ := drv.GetMoneyDrawerSettings()
+		opts, _ := drv.GetOptions()
+		tz, _ := drv.GetTimezone()
+
+		mw.Synchronize(func() {
+			// Заполняем ViewModel
+			if ofd != nil {
+				serviceModel.OfdString = joinHostPort(ofd.Addr, ofd.Port)
+				serviceModel.OfdClient = ofd.Client
+				serviceModel.TimerFN = ofd.TimerFN
+				serviceModel.TimerOFD = ofd.TimerOFD
+			}
+			if oism != nil {
+				serviceModel.OismString = joinHostPort(oism.Addr, oism.Port)
+			}
+			if lan != nil {
+				serviceModel.LanAddr = lan.Addr
+				serviceModel.LanPort = lan.Port
+				serviceModel.LanMask = lan.Mask
+				serviceModel.LanDns = lan.Dns
+				serviceModel.LanGw = lan.Gw
+			}
+			if prn != nil {
+				serviceModel.PrintModel = prn.Model
+				serviceModel.PrintBaud = strconv.Itoa(prn.BaudRate)
+				serviceModel.PrintPaper = prn.Paper
+				serviceModel.PrintFont = prn.Font
+			}
+			if cd != nil {
+				serviceModel.DrawerPin = cd.Pin
+				serviceModel.DrawerRise = cd.Rise
+				serviceModel.DrawerFall = cd.Fall
+			}
+			serviceModel.OptTimezone = strconv.Itoa(tz)
+			if opts != nil {
+				serviceModel.OptQRPos = fmt.Sprintf("%d", opts.B1)
+				serviceModel.OptRounding = fmt.Sprintf("%d", opts.B2)
+				serviceModel.OptCut = (opts.B3 == 1)
+				serviceModel.OptAutoTest = (opts.B4 == 1)
+				serviceModel.OptDrawerTrig = fmt.Sprintf("%d", opts.B5)
+				serviceModel.OptNearEnd = (opts.B6 == 1)
+				serviceModel.OptTextQR = (opts.B7 == 1)
+				serviceModel.OptCountInCheck = (opts.B8 == 1)
+				serviceModel.OptB9 = fmt.Sprintf("%d", opts.B9)
+			}
+		})
+
+		// 4. Клише (ВСЕ ТИПЫ)
+		// Для снапшота нам нужно прочитать все 4 типа клише, чтобы иметь базу для сравнения.
+		// Это может занять время.
+		allCliches := make(map[int][]driver.ClicheLineData)
+		for i := 1; i <= 4; i++ {
+			lines, err := drv.GetHeader(i)
+			if err == nil {
+				allCliches[i] = lines
+			}
+		}
+
+		mw.Synchronize(func() {
+			// Обновляем текущее отображаемое клише в VM
+			curType, _ := strconv.Atoi(serviceModel.SelectedClicheType)
+			lines := allCliches[curType]
+			for i := 0; i < 10; i++ {
+				if i < len(lines) {
+					serviceModel.ClicheItems[i].Text = lines[i].Text
+					serviceModel.ClicheItems[i].Format = lines[i].Format
+				} else {
+					serviceModel.ClicheItems[i].Text = ""
+					serviceModel.ClicheItems[i].Format = "000000"
+				}
+				serviceModel.ClicheItems[i].ParseFormatString()
+			}
+			clicheModel.PublishRowsReset()
+
+			// ВАЖНО: Формируем полный снапшот вручную.
+			// viewModelToSnapshot берет данные из VM, но клише там только одного типа.
+			// Нам нужно внедрить туда все прочитанные клише (allCliches).
+
+			// 1. Создаем снапшот из текущей VM (тут будет только 1 тип клише)
+			tempSnap := viewModelToSnapshot(serviceModel)
+
+			// 2. Подменяем карту клише на полную, которую мы только что вычитали
+			tempSnap.Cliches = allCliches
+
+			// 3. Сохраняем как начальное и текущее состояние
+			initialSnapshot = tempSnap
+			currentSnapshot = tempSnap
+
+			// Сбрасываем изменения (так как мы только что считали данные)
+			currentChanges = nil
+			recalcChanges()
+		})
 	}()
-}
-
-func readNetworkSettings() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-
-	ofd, _ := drv.GetOfdSettings()
-	oism, _ := drv.GetOismSettings()
-	lan, _ := drv.GetLanSettings()
-
-	mw.Synchronize(func() {
-		if ofd != nil {
-			serviceModel.OfdString = joinHostPort(ofd.Addr, ofd.Port)
-			serviceModel.OfdClient = ofd.Client
-			serviceModel.TimerFN = ofd.TimerFN
-			serviceModel.TimerOFD = ofd.TimerOFD
-		}
-		if oism != nil {
-			serviceModel.OismString = joinHostPort(oism.Addr, oism.Port)
-		}
-		if lan != nil {
-			serviceModel.LanAddr = lan.Addr
-			serviceModel.LanPort = lan.Port
-			serviceModel.LanMask = lan.Mask
-			serviceModel.LanDns = lan.Dns
-			serviceModel.LanGw = lan.Gw
-		}
-		serviceBinder.Reset()
-	})
-}
-
-func readAllParameters() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-
-	prn, _ := drv.GetPrinterSettings()
-	cd, _ := drv.GetMoneyDrawerSettings()
-	opts, _ := drv.GetOptions()
-	tz, _ := drv.GetTimezone()
-
-	mw.Synchronize(func() {
-		// Принтер
-		if prn != nil {
-			serviceModel.PrintModel = prn.Model
-			serviceModel.PrintBaud = strconv.Itoa(prn.BaudRate)
-			serviceModel.PrintPaper = prn.Paper
-			serviceModel.PrintFont = prn.Font
-		}
-
-		// Ящик
-		if cd != nil {
-			serviceModel.DrawerPin = cd.Pin
-			serviceModel.DrawerRise = cd.Rise
-			serviceModel.DrawerFall = cd.Fall
-		}
-
-		// Часовой пояс
-		serviceModel.OptTimezone = strconv.Itoa(tz)
-
-		// Опции
-		if opts != nil {
-			serviceModel.OptQRPos = fmt.Sprintf("%d", opts.B1)
-			serviceModel.OptRounding = fmt.Sprintf("%d", opts.B2)
-			serviceModel.OptCut = (opts.B3 == 1)
-			serviceModel.OptAutoTest = (opts.B4 == 1)
-			serviceModel.OptDrawerTrig = fmt.Sprintf("%d", opts.B5)
-			serviceModel.OptNearEnd = (opts.B6 == 1)
-			serviceModel.OptTextQR = (opts.B7 == 1)
-			serviceModel.OptCountInCheck = (opts.B8 == 1)
-			serviceModel.OptB9 = fmt.Sprintf("%d", opts.B9)
-		}
-
-		serviceBinder.Reset()
-	})
 }
 
 // -----------------------------
@@ -483,12 +749,11 @@ func GetServiceTab() d.TabPage {
 		OptDrawerTrig:      "1",
 		OptCut:             true,
 		OptB9:              "0",
-		OfdClient:          "1", // По умолчанию внешний
+		OfdClient:          "1",
 		SelectedClicheType: "1",
-		CurrentClicheLine:  &ClicheItem{}, // Заглушка, чтобы binder не падал
+		CurrentClicheLine:  &ClicheItem{},
 	}
 
-	// Инициализация строк клише (10 пустых)
 	serviceModel.ClicheItems = make([]*ClicheItem, 10)
 	for i := 0; i < 10; i++ {
 		item := &ClicheItem{Index: i, Format: "000000"}
@@ -535,8 +800,13 @@ func GetServiceTab() d.TabPage {
 							d.PushButton{Text: "Ден. ящик", OnClicked: onOpenDrawer, MinSize: d.Size{Width: 90}},
 							d.PushButton{Text: "X-отчёт", OnClicked: onPrintXReport, MinSize: d.Size{Width: 90}},
 							d.PushButton{Text: "Сброс МГМ", OnClicked: onMGMReset, MinSize: d.Size{Width: 90}},
-							d.PushButton{Text: "Прочитать всё", OnClicked: func() { readNetworkSettings(); readAllParameters() }, MinSize: d.Size{Width: 90}},
-							d.PushButton{Text: "Записать всё", OnClicked: onWriteAllParameters, MinSize: d.Size{Width: 90}},
+							// ОСНОВНЫЕ КНОПКИ УПРАВЛЕНИЯ НАСТРОЙКАМИ
+							d.PushButton{
+								AssignTo:  &btnServiceAction,
+								Text:      "Считать",
+								OnClicked: onServiceAction,
+								MinSize:   d.Size{Width: 150},
+							},
 						},
 					},
 				},
@@ -547,10 +817,9 @@ func GetServiceTab() d.TabPage {
 				MinSize: d.Size{Height: 350},
 				Pages: []d.TabPage{
 
-					// 1. ПАРАМЕТРЫ (Объединенная вкладка)
+					// 1. ПАРАМЕТРЫ
 					{
-						Title: "Параметры",
-						// Нулевые отступы для вкладки
+						Title:  "Параметры",
 						Layout: d.VBox{MarginsZero: true, Spacing: 0, Alignment: d.AlignHNearVNear},
 						Children: []d.Widget{
 							d.Composite{
@@ -561,28 +830,26 @@ func GetServiceTab() d.TabPage {
 									d.Composite{
 										Layout: d.VBox{MarginsZero: true, Spacing: 4},
 										Children: []d.Widget{
-											// Group 1: ОФД и ОИСМ
 											d.GroupBox{
 												Title:  "ОФД и ОИСМ",
 												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
-													d.Label{Text: "ОФД:"}, d.LineEdit{Text: d.Bind("OfdString"), MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}},
-													d.Label{Text: "ОИСМ:"}, d.LineEdit{Text: d.Bind("OismString"), MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}},
-													d.Label{Text: "Пояс:"}, d.ComboBox{Value: d.Bind("OptTimezone"), BindingMember: "Code", DisplayMember: "Name", Model: listTimezones, MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}},
+													d.Label{AssignTo: &sLabels.OfdAddr, Text: "ОФД:"}, d.LineEdit{Text: d.Bind("OfdString"), MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OismAddr, Text: "ОИСМ:"}, d.LineEdit{Text: d.Bind("OismString"), MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.Timezone, Text: "Пояс:"}, d.ComboBox{Value: d.Bind("OptTimezone"), BindingMember: "Code", DisplayMember: "Name", Model: listTimezones, MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}, OnCurrentIndexChanged: recalcChanges},
 												},
 											},
-											// Group 2: Принтер
 											d.GroupBox{
 												Title:  "Принтер и Бумага",
 												Layout: d.Grid{Columns: 4, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
-													d.Label{Text: "Модель:"}, d.ComboBox{Value: d.Bind("PrintModel"), BindingMember: "Code", DisplayMember: "Name", Model: listModels, MaxSize: d.Size{Width: 70}},
-													d.Label{Text: "Отрез:"}, d.CheckBox{Checked: d.Bind("OptCut")},
-													d.Label{Text: "Бод:"}, d.ComboBox{Value: d.Bind("PrintBaud"), BindingMember: "Code", DisplayMember: "Name", Model: listBaud, MaxSize: d.Size{Width: 70}},
-													d.Label{Text: "Звук:"}, d.CheckBox{Checked: d.Bind("OptNearEnd")},
-													d.Label{Text: "Ширина:"}, d.ComboBox{Value: d.Bind("PrintPaper"), BindingMember: "Code", DisplayMember: "Name", Model: listPapers, MaxSize: d.Size{Width: 70}},
-													d.Label{Text: "Тест:"}, d.CheckBox{Checked: d.Bind("OptAutoTest")},
-													d.Label{Text: "Шрифт:"}, d.ComboBox{Value: d.Bind("PrintFont"), BindingMember: "Code", DisplayMember: "Name", Model: listFonts, MaxSize: d.Size{Width: 70}, ToolTipText: "A-стандратный, B-компактный"},
+													d.Label{AssignTo: &sLabels.PrinterModel, Text: "Модель:"}, d.ComboBox{Value: d.Bind("PrintModel"), BindingMember: "Code", DisplayMember: "Name", Model: listModels, MaxSize: d.Size{Width: 70}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterCut, Text: "Отрез:"}, d.CheckBox{Checked: d.Bind("OptCut"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterBaud, Text: "Бод:"}, d.ComboBox{Value: d.Bind("PrintBaud"), BindingMember: "Code", DisplayMember: "Name", Model: listBaud, MaxSize: d.Size{Width: 70}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterSound, Text: "Звук:"}, d.CheckBox{Checked: d.Bind("OptNearEnd"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterPaper, Text: "Ширина:"}, d.ComboBox{Value: d.Bind("PrintPaper"), BindingMember: "Code", DisplayMember: "Name", Model: listPapers, MaxSize: d.Size{Width: 70}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterTest, Text: "Тест:"}, d.CheckBox{Checked: d.Bind("OptAutoTest"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterFont, Text: "Шрифт:"}, d.ComboBox{Value: d.Bind("PrintFont"), BindingMember: "Code", DisplayMember: "Name", Model: listFonts, MaxSize: d.Size{Width: 70}, ToolTipText: "A-стандратный, B-компактный", OnCurrentIndexChanged: recalcChanges},
 												},
 											},
 										},
@@ -592,25 +859,23 @@ func GetServiceTab() d.TabPage {
 									d.Composite{
 										Layout: d.VBox{MarginsZero: true, Spacing: 4},
 										Children: []d.Widget{
-											// Group 3: Клиент
 											d.GroupBox{
 												Title:  "Настройки клиента",
 												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
-													d.Label{Text: "Режим:"}, d.ComboBox{Value: d.Bind("OfdClient"), BindingMember: "Code", DisplayMember: "Name", Model: listClients, OnCurrentIndexChanged: checkOfdClientChange, MaxSize: d.Size{Width: 100}},
-													d.Label{Text: "Т. ФН:"}, d.NumberEdit{Value: d.Bind("TimerFN"), MaxSize: d.Size{Width: 40}},
-													d.Label{Text: "Т. ОФД:"}, d.NumberEdit{Value: d.Bind("TimerOFD"), MaxSize: d.Size{Width: 40}},
+													d.Label{AssignTo: &sLabels.OfdClient, Text: "Режим:"}, d.ComboBox{Value: d.Bind("OfdClient"), BindingMember: "Code", DisplayMember: "Name", Model: listClients, OnCurrentIndexChanged: checkOfdClientChange, MaxSize: d.Size{Width: 100}},
+													d.Label{AssignTo: &sLabels.TimerFN, Text: "Т. ФН:"}, d.NumberEdit{Value: d.Bind("TimerFN"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.TimerOFD, Text: "Т. ОФД:"}, d.NumberEdit{Value: d.Bind("TimerOFD"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
 												},
 											},
-											// Group 4: Ящик
 											d.GroupBox{
 												Title:  "Денежный ящик",
 												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
-													d.Label{Text: "Триггер:"}, d.ComboBox{Value: d.Bind("OptDrawerTrig"), BindingMember: "Code", DisplayMember: "Name", Model: listDrawerTrig, MaxSize: d.Size{Width: 80}},
-													d.Label{Text: "PIN:"}, d.NumberEdit{Value: d.Bind("DrawerPin"), MaxSize: d.Size{Width: 40}},
-													d.Label{Text: "Rise:"}, d.NumberEdit{Value: d.Bind("DrawerRise"), MaxSize: d.Size{Width: 40}},
-													d.Label{Text: "Fall:"}, d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 40}},
+													d.Label{AssignTo: &sLabels.DrawerTrig, Text: "Триггер:"}, d.ComboBox{Value: d.Bind("OptDrawerTrig"), BindingMember: "Code", DisplayMember: "Name", Model: listDrawerTrig, MaxSize: d.Size{Width: 80}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.DrawerPin, Text: "PIN:"}, d.NumberEdit{Value: d.Bind("DrawerPin"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.DrawerRise, Text: "Rise:"}, d.NumberEdit{Value: d.Bind("DrawerRise"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.DrawerFall, Text: "Fall:"}, d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
 												},
 											},
 										},
@@ -620,27 +885,25 @@ func GetServiceTab() d.TabPage {
 									d.Composite{
 										Layout: d.VBox{MarginsZero: true, Spacing: 4},
 										Children: []d.Widget{
-											// Group 5: LAN
 											d.GroupBox{
 												Title:  "Сеть (LAN)",
 												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
-													d.Label{Text: "IP:"}, d.LineEdit{Text: d.Bind("LanAddr"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}},
-													d.Label{Text: "Mask:"}, d.LineEdit{Text: d.Bind("LanMask"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}},
-													d.Label{Text: "GW:"}, d.LineEdit{Text: d.Bind("LanGw"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}},
-													d.Label{Text: "Port:"}, d.NumberEdit{Value: d.Bind("LanPort"), MaxSize: d.Size{Width: 60}},
+													d.Label{AssignTo: &sLabels.LanIp, Text: "IP:"}, d.LineEdit{Text: d.Bind("LanAddr"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.LanMask, Text: "Mask:"}, d.LineEdit{Text: d.Bind("LanMask"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.LanGw, Text: "GW:"}, d.LineEdit{Text: d.Bind("LanGw"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.LanPort, Text: "Port:"}, d.NumberEdit{Value: d.Bind("LanPort"), MaxSize: d.Size{Width: 60}, OnValueChanged: recalcChanges},
 												},
 											},
-											// Group 6: Чеки
 											d.GroupBox{
 												Title:  "Вид чека и Опции",
 												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
-													d.Label{Text: "QR:"}, d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos, MaxSize: d.Size{Width: 80}},
-													d.Label{Text: "Текст QR:"}, d.CheckBox{Checked: d.Bind("OptTextQR")},
-													d.Label{Text: "Покупок:"}, d.CheckBox{Checked: d.Bind("OptCountInCheck")},
-													d.Label{Text: "Округл.:"}, d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding, MaxSize: d.Size{Width: 60}},
-													d.Label{Text: "b9:"}, d.LineEdit{Text: d.Bind("OptB9"), MaxLength: 3, MaxSize: d.Size{Width: 30}, ToolTipText: "Сумма: СНО(1-8) + X-отчет(16)"},
+													d.Label{AssignTo: &sLabels.OptQRPos, Text: "QR:"}, d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos, MaxSize: d.Size{Width: 80}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OptTextQR, Text: "Текст QR:"}, d.CheckBox{Checked: d.Bind("OptTextQR"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OptCount, Text: "Покупок:"}, d.CheckBox{Checked: d.Bind("OptCountInCheck"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OptRounding, Text: "Округл.:"}, d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding, MaxSize: d.Size{Width: 60}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OptB9, Text: "b9:"}, d.LineEdit{Text: d.Bind("OptB9"), MaxLength: 3, MaxSize: d.Size{Width: 30}, ToolTipText: "Сумма: СНО(1-8) + X-отчет(16)", OnTextChanged: recalcChanges},
 												},
 											},
 										},
@@ -650,32 +913,27 @@ func GetServiceTab() d.TabPage {
 						},
 					},
 
-					// 2. КЛИШЕ (Master-Detail Редактор)
+					// 2. КЛИШЕ
 					{
 						Title:  "Клише",
 						Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 5},
 						Children: []d.Widget{
-							// Панель выбора
 							d.Composite{
 								Layout: d.HBox{MarginsZero: true, Alignment: d.AlignHNearVCenter},
 								Children: []d.Widget{
-									d.Label{Text: "Редактировать:"},
+									d.Label{AssignTo: &sLabels.ClicheHeader, Text: "Редактировать:"},
 									d.ComboBox{
 										Value:         d.Bind("SelectedClicheType"),
 										Model:         listClicheTypes,
 										BindingMember: "Code", DisplayMember: "Name",
-										MinSize: d.Size{Width: 200},
+										MinSize:               d.Size{Width: 200},
+										OnCurrentIndexChanged: onClicheTypeSwitched, // Специальный обработчик
 									},
-									d.PushButton{Text: "Считать", OnClicked: onReadCliche},
-									d.PushButton{Text: "Записать", OnClicked: onWriteCliche},
 								},
 							},
-
-							// Рабочая область
 							d.Composite{
 								Layout: d.HBox{MarginsZero: true, Spacing: 10},
 								Children: []d.Widget{
-									// Таблица (Список строк)
 									d.TableView{
 										AssignTo:         &clicheTable,
 										Model:            clicheModel,
@@ -688,26 +946,22 @@ func GetServiceTab() d.TabPage {
 										MinSize:               d.Size{Width: 400, Height: 200},
 										OnCurrentIndexChanged: onClicheSelectionChanged,
 									},
-
-									// Редактор выбранной строки
 									d.GroupBox{
 										AssignTo: &clicheEditorGroup,
 										Title:    "Настройки строки",
 										Layout:   d.VBox{Margins: d.Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}, Spacing: 8},
-										Enabled:  false, // По умолчанию выключено
+										Enabled:  false,
 										DataBinder: d.DataBinder{
 											AssignTo:   &clicheEditorBinder,
 											DataSource: serviceModel.CurrentClicheLine,
-											// OnChange удален, так как его не существует в d.DataBinder
 											AutoSubmit: true,
 										},
 										Children: []d.Widget{
 											d.Label{Text: "Текст:"},
 											d.LineEdit{
 												Text:          d.Bind("Text"),
-												OnTextChanged: onClicheItemChanged, // Отслеживаем изменение текста
+												OnTextChanged: onClicheItemChanged,
 											},
-
 											d.Composite{
 												Layout: d.Grid{Columns: 2, Spacing: 10},
 												Children: []d.Widget{
@@ -717,29 +971,26 @@ func GetServiceTab() d.TabPage {
 														Model:                 listAlign,
 														BindingMember:         "Code",
 														DisplayMember:         "Name",
-														OnCurrentIndexChanged: onClicheItemChanged, // Отслеживаем выбор
+														OnCurrentIndexChanged: onClicheItemChanged,
 													},
-
 													d.Label{Text: "Шрифт:"},
 													d.ComboBox{
 														Value:                 d.Bind("Font"),
 														Model:                 listFonts,
 														BindingMember:         "Code",
 														DisplayMember:         "Name",
-														OnCurrentIndexChanged: onClicheItemChanged, // Отслеживаем выбор
+														OnCurrentIndexChanged: onClicheItemChanged,
 													},
-
 													d.Label{Text: "Подчеркивание:"},
 													d.ComboBox{
 														Value:                 d.Bind("Underline"),
 														Model:                 listUnderline,
 														BindingMember:         "Code",
 														DisplayMember:         "Name",
-														OnCurrentIndexChanged: onClicheItemChanged, // Отслеживаем выбор
+														OnCurrentIndexChanged: onClicheItemChanged,
 													},
 												},
 											},
-
 											d.GroupBox{
 												Title:  "Масштабирование",
 												Layout: d.Grid{Columns: 4},
@@ -750,7 +1001,7 @@ func GetServiceTab() d.TabPage {
 														MinValue:       0,
 														MaxValue:       8,
 														MaxSize:        d.Size{Width: 40},
-														OnValueChanged: onClicheItemChanged, // Отслеживаем число
+														OnValueChanged: onClicheItemChanged,
 													},
 													d.Label{Text: "Высота:"},
 													d.NumberEdit{
@@ -758,14 +1009,14 @@ func GetServiceTab() d.TabPage {
 														MinValue:       0,
 														MaxValue:       8,
 														MaxSize:        d.Size{Width: 40},
-														OnValueChanged: onClicheItemChanged, // Отслеживаем число
+														OnValueChanged: onClicheItemChanged,
 													},
 												},
 											},
 											d.CheckBox{
 												Text:                "Инверсия (Белым по черному)",
 												Checked:             d.Bind("Invert"),
-												OnCheckStateChanged: func() { onClicheItemChanged() }, // Отслеживаем галочку
+												OnCheckStateChanged: func() { onClicheItemChanged() },
 											},
 										},
 									},
@@ -792,19 +1043,53 @@ func checkOfdClientChange() {
 	if isLoadingData {
 		return
 	}
+	recalcChanges() // Сразу вызываем пересчет
+
 	if serviceModel.OfdClient == "0" {
 		res := walk.MsgBox(mw, "Подтверждение",
 			"Для использования встроенного клиента ОФД требуется подключение ФР к локальной сети (LAN).\n\nПодтверждаете переключение?",
 			walk.MsgBoxYesNo|walk.MsgBoxIconQuestion)
 
 		if res != walk.DlgCmdYes {
-			// Откат значения
 			serviceModel.OfdClient = "1"
-			// Принудительно обновляем UI
 			if serviceBinder != nil {
 				serviceBinder.Reset()
 			}
+			recalcChanges()
 		}
+	}
+}
+
+func onClicheTypeSwitched() {
+	if isLoadingData || initialSnapshot == nil {
+		return
+	}
+	// Сохраняем состояние предыдущего выбора в currentSnapshot (это делает viewModelToSnapshot)
+	// и загружаем новый выбор в UI.
+	// 1. Сначала коммитим текущие изменения в currentSnapshot (через recalc)
+	recalcChanges()
+
+	// 2. Теперь загружаем данные для НОВОГО типа из currentSnapshot в ViewModel
+	newType, _ := strconv.Atoi(serviceModel.SelectedClicheType)
+
+	// В currentSnapshot уже хранятся актуальные данные для всех типов (т.к. мы делали DeepCopy при инициализации и обновляем в viewModelToSnapshot)
+	lines := currentSnapshot.Cliches[newType]
+
+	// Заполняем ViewModel данными из снапшота
+	for i := 0; i < 10; i++ {
+		if i < len(lines) {
+			serviceModel.ClicheItems[i].Text = lines[i].Text
+			serviceModel.ClicheItems[i].Format = lines[i].Format
+		} else {
+			serviceModel.ClicheItems[i].Text = ""
+			serviceModel.ClicheItems[i].Format = "000000"
+		}
+		serviceModel.ClicheItems[i].ParseFormatString()
+	}
+
+	clicheModel.PublishRowsReset()
+	if idx := clicheTable.CurrentIndex(); idx >= 0 {
+		reloadEditor(idx)
 	}
 }
 
@@ -813,107 +1098,24 @@ func checkOfdClientChange() {
 // -----------------------------
 
 func onWriteAllParameters() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-	if err := serviceBinder.Submit(); err != nil {
+	// Если нет изменений, выходим (кнопка должна быть disabled, но на всякий случай)
+	if len(currentChanges) == 0 {
 		return
 	}
 
-	baudRate, _ := strconv.Atoi(serviceModel.PrintBaud)
-	tz, _ := strconv.Atoi(serviceModel.OptTimezone)
+	// 1. Показываем диалог со списком изменений
+	confirmed, finalChanges := RunDiffDialog(mw, currentChanges)
+	if !confirmed {
+		return
+	}
 
-	// Подготовка данных ОФД/LAN
-	ofdHost, ofdPort := splitHostPort(serviceModel.OfdString)
-	oismHost, oismPort := splitHostPort(serviceModel.OismString)
+	if len(finalChanges) == 0 {
+		return // Пользователь удалил все строки и нажал ОК
+	}
 
-	go func() {
-		// 1. Принтер
-		drv.SetPrinterSettings(driver.PrinterSettings{
-			Model:    serviceModel.PrintModel,
-			BaudRate: baudRate,
-			Paper:    serviceModel.PrintPaper,
-			Font:     serviceModel.PrintFont,
-		})
-
-		// 2. Ящик
-		drv.SetMoneyDrawerSettings(driver.DrawerSettings{
-			Pin:  serviceModel.DrawerPin,
-			Rise: serviceModel.DrawerRise,
-			Fall: serviceModel.DrawerFall,
-		})
-
-		// 3. Timezone
-		drv.SetTimezone(tz)
-
-		// 4. Опции
-		if v, err := strconv.Atoi(serviceModel.OptQRPos); err == nil {
-			drv.SetOption(1, v)
-		}
-		if v, err := strconv.Atoi(serviceModel.OptRounding); err == nil {
-			drv.SetOption(2, v)
-		}
-
-		if serviceModel.OptCut {
-			drv.SetOption(3, 1)
-		} else {
-			drv.SetOption(3, 0)
-		}
-		if serviceModel.OptAutoTest {
-			drv.SetOption(4, 1)
-		} else {
-			drv.SetOption(4, 0)
-		}
-
-		if v, err := strconv.Atoi(serviceModel.OptDrawerTrig); err == nil {
-			drv.SetOption(5, v)
-		}
-
-		if serviceModel.OptNearEnd {
-			drv.SetOption(6, 1)
-		} else {
-			drv.SetOption(6, 0)
-		}
-		if serviceModel.OptTextQR {
-			drv.SetOption(7, 1)
-		} else {
-			drv.SetOption(7, 0)
-		}
-		if serviceModel.OptCountInCheck {
-			drv.SetOption(8, 1)
-		} else {
-			drv.SetOption(8, 0)
-		}
-		if v, err := strconv.Atoi(serviceModel.OptB9); err == nil {
-			drv.SetOption(9, v)
-		}
-
-		// 5. ОФД
-		drv.SetOfdSettings(driver.OfdSettings{
-			Addr:     ofdHost,
-			Port:     ofdPort,
-			Client:   serviceModel.OfdClient,
-			TimerFN:  serviceModel.TimerFN,
-			TimerOFD: serviceModel.TimerOFD,
-		})
-
-		// 6. ОИСМ
-		drv.SetOismSettings(driver.ServerSettings{Addr: oismHost, Port: oismPort})
-
-		// 7. LAN
-		drv.SetLanSettings(driver.LanSettings{
-			Addr: serviceModel.LanAddr, Mask: serviceModel.LanMask, Port: serviceModel.LanPort,
-			Dns: serviceModel.LanDns, Gw: serviceModel.LanGw,
-		})
-
-		mw.Synchronize(func() {
-			walk.MsgBox(mw, "Успех", "Все параметры отправлены в ККТ", walk.MsgBoxIconInformation)
-		})
-	}()
+	// 2. Запускаем пайплайн применения
+	ApplyChangesPipeline(finalChanges)
 }
-
-// Удалены onWriteOfdSettings, onWriteOismSettings, onWriteLanSettings за ненадобностью
 
 func onTechReset() {
 	drv := driver.Active
@@ -934,11 +1136,7 @@ func onTechReset() {
 				walk.MsgBox(mw, "Ошибка", "Сбой тех. обнуления: "+err.Error(), walk.MsgBoxIconError)
 			} else {
 				walk.MsgBox(mw, "Успех", "Технологическое обнуление выполнено.", walk.MsgBoxIconInformation)
-				// Перечитываем настройки, так как они сбросились
-				isLoadingData = true
-				readAllParameters()
-				readNetworkSettings()
-				isLoadingData = false
+				onReadAllSettings() // Перечитываем всё
 			}
 		})
 	}()
@@ -1012,94 +1210,10 @@ func onMGMReset() {
 	go func() { drv.ResetMGM() }()
 }
 
-func onReadOfdSettings() {
-	mw.Synchronize(func() { isLoadingData = true })
-	readNetworkSettings()
-	mw.Synchronize(func() { isLoadingData = false })
-}
-func onReadOismSettings() { onReadOfdSettings() }
-func onReadLanSettings()  { onReadOfdSettings() }
-
 // -----------------------------
 // ЛОГИКА КЛИШЕ (НОВАЯ)
 // -----------------------------
 
-// onReadCliche читает выбранный тип клише из ККТ
-func onReadCliche() {
-	drv := driver.Active
-	if drv == nil {
-		walk.MsgBox(mw, "Ошибка", "Нет подключения", walk.MsgBoxIconError)
-		return
-	}
-
-	typeID, _ := strconv.Atoi(serviceModel.SelectedClicheType)
-
-	go func() {
-		lines, err := drv.GetHeader(typeID)
-		if err != nil {
-			mw.Synchronize(func() {
-				walk.MsgBox(mw, "Ошибка", fmt.Sprintf("Ошибка чтения клише: %v", err), walk.MsgBoxIconError)
-			})
-			return
-		}
-
-		mw.Synchronize(func() {
-			// Заполняем модель
-			for i := 0; i < 10; i++ {
-				if i < len(lines) {
-					serviceModel.ClicheItems[i].Text = lines[i].Text
-					serviceModel.ClicheItems[i].Format = lines[i].Format
-				} else {
-					serviceModel.ClicheItems[i].Text = ""
-					serviceModel.ClicheItems[i].Format = "000000"
-				}
-				// Парсим формат для редактора
-				serviceModel.ClicheItems[i].ParseFormatString()
-			}
-			// Обновляем таблицу
-			clicheModel.PublishRowsReset()
-			// Если что-то выбрано, обновляем редактор
-			idx := clicheTable.CurrentIndex()
-			if idx >= 0 {
-				reloadEditor(idx)
-			}
-		})
-	}()
-}
-
-// onWriteCliche записывает текущее состояние таблицы в ККТ
-func onWriteCliche() {
-	drv := driver.Active
-	if drv == nil {
-		return
-	}
-
-	typeID, _ := strconv.Atoi(serviceModel.SelectedClicheType)
-
-	// Подготавливаем данные
-	var linesToWrite []struct{ txt, fmt string }
-	for _, item := range serviceModel.ClicheItems {
-		// Убедимся, что формат актуален
-		item.UpdateFormatString()
-		linesToWrite = append(linesToWrite, struct{ txt, fmt string }{item.Text, item.Format})
-	}
-
-	go func() {
-		for i, l := range linesToWrite {
-			// i = номер строки (0..9)
-			// l.fmt уже "xxxxxx"
-			if err := drv.SetHeaderLine(typeID, i, l.txt, l.fmt); err != nil {
-				// Логируем или игнорируем
-				fmt.Printf("Error writing line %d: %v\n", i, err)
-			}
-		}
-		mw.Synchronize(func() {
-			walk.MsgBox(mw, "Успех", "Клише записано", walk.MsgBoxIconInformation)
-		})
-	}()
-}
-
-// onClicheSelectionChanged вызывается при клике на строку таблицы
 func onClicheSelectionChanged() {
 	idx := clicheTable.CurrentIndex()
 	if idx < 0 {
@@ -1109,13 +1223,8 @@ func onClicheSelectionChanged() {
 	reloadEditor(idx)
 }
 
-// reloadEditor перепривязывает редактор к выбранной строке
 func reloadEditor(idx int) {
-	// 1. Берем указатель на реальный объект из списка
 	item := serviceModel.ClicheItems[idx]
-
-	// 2. Подменяем DataSource у биндера редактора
-	// ВАЖНО: Мы меняем источник данных для binder'а на лету
 	clicheEditorBinder.SetDataSource(item)
 	clicheEditorBinder.Reset()
 
@@ -1123,14 +1232,13 @@ func reloadEditor(idx int) {
 	clicheEditorGroup.SetTitle(fmt.Sprintf("Настройки строки №%d", idx+1))
 }
 
-// onClicheItemChanged вызывается при любом изменении в полях редактора
 func onClicheItemChanged() {
-	// Принудительно обновляем форматную строку на основе полей
+	// При любом изменении в редакторе пересчитываем формат и изменения
 	idx := clicheTable.CurrentIndex()
 	if idx >= 0 {
 		item := serviceModel.ClicheItems[idx]
 		item.UpdateFormatString()
-		// Уведомляем таблицу, что данные в этой строке изменились
 		clicheModel.PublishRowChanged(idx)
+		recalcChanges()
 	}
 }
