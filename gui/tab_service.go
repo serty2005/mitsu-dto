@@ -807,7 +807,7 @@ func GetServiceTab() d.TabPage {
 
 			// ТАБЫ ПОДКАТЕГОРИЙ
 			d.TabWidget{
-				MinSize: d.Size{Height: 350},
+				MinSize: d.Size{Height: 300},
 				Pages: []d.TabPage{
 
 					// 1. ПАРАМЕТРЫ
@@ -845,6 +845,16 @@ func GetServiceTab() d.TabPage {
 													d.Label{AssignTo: &sLabels.PrinterFont, Text: "Шрифт:"}, d.ComboBox{Value: d.Bind("PrintFont"), BindingMember: "Code", DisplayMember: "Name", Model: listFonts, MaxSize: d.Size{Width: 70}, ToolTipText: "A-стандратный, B-компактный", OnCurrentIndexChanged: recalcChanges},
 												},
 											},
+											d.GroupBox{
+												Title:  "Сеть (LAN)",
+												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Children: []d.Widget{
+													d.Label{AssignTo: &sLabels.LanIp, Text: "IP:"}, d.LineEdit{Text: d.Bind("LanAddr"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.LanMask, Text: "Mask:"}, d.LineEdit{Text: d.Bind("LanMask"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.LanGw, Text: "GW:"}, d.LineEdit{Text: d.Bind("LanGw"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.LanPort, Text: "Port:"}, d.NumberEdit{Value: d.Bind("LanPort"), MaxSize: d.Size{Width: 60}, OnValueChanged: recalcChanges},
+												},
+											},
 										},
 									},
 
@@ -871,23 +881,6 @@ func GetServiceTab() d.TabPage {
 													d.Label{AssignTo: &sLabels.DrawerFall, Text: "Fall:"}, d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
 												},
 											},
-										},
-									},
-
-									// КОЛОНКА 3
-									d.Composite{
-										Layout: d.VBox{MarginsZero: true, Spacing: 4},
-										Children: []d.Widget{
-											d.GroupBox{
-												Title:  "Сеть (LAN)",
-												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
-												Children: []d.Widget{
-													d.Label{AssignTo: &sLabels.LanIp, Text: "IP:"}, d.LineEdit{Text: d.Bind("LanAddr"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.LanMask, Text: "Mask:"}, d.LineEdit{Text: d.Bind("LanMask"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.LanGw, Text: "GW:"}, d.LineEdit{Text: d.Bind("LanGw"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.LanPort, Text: "Port:"}, d.NumberEdit{Value: d.Bind("LanPort"), MaxSize: d.Size{Width: 60}, OnValueChanged: recalcChanges},
-												},
-											},
 											d.GroupBox{
 												Title:  "Вид чека и Опции",
 												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
@@ -901,6 +894,34 @@ func GetServiceTab() d.TabPage {
 											},
 										},
 									},
+
+									// КОЛОНКА 3
+									// d.Composite{
+									// 	Layout: d.VBox{MarginsZero: true, Spacing: 4},
+									// 	Children: []d.Widget{
+									// 		d.GroupBox{
+									// 			Title:  "Сеть (LAN)",
+									// 			Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+									// 			Children: []d.Widget{
+									// 				d.Label{AssignTo: &sLabels.LanIp, Text: "IP:"}, d.LineEdit{Text: d.Bind("LanAddr"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
+									// 				d.Label{AssignTo: &sLabels.LanMask, Text: "Mask:"}, d.LineEdit{Text: d.Bind("LanMask"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
+									// 				d.Label{AssignTo: &sLabels.LanGw, Text: "GW:"}, d.LineEdit{Text: d.Bind("LanGw"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
+									// 				d.Label{AssignTo: &sLabels.LanPort, Text: "Port:"}, d.NumberEdit{Value: d.Bind("LanPort"), MaxSize: d.Size{Width: 60}, OnValueChanged: recalcChanges},
+									// 			},
+									// 		},
+									// 		d.GroupBox{
+									// 			Title:  "Вид чека и Опции",
+									// 			Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+									// 			Children: []d.Widget{
+									// 				d.Label{AssignTo: &sLabels.OptQRPos, Text: "QR:"}, d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos, MaxSize: d.Size{Width: 80}, OnCurrentIndexChanged: recalcChanges},
+									// 				d.Label{AssignTo: &sLabels.OptTextQR, Text: "Текст QR:"}, d.CheckBox{Checked: d.Bind("OptTextQR"), OnCheckStateChanged: recalcChanges},
+									// 				d.Label{AssignTo: &sLabels.OptCount, Text: "Покупок:"}, d.CheckBox{Checked: d.Bind("OptCountInCheck"), OnCheckStateChanged: recalcChanges},
+									// 				d.Label{AssignTo: &sLabels.OptRounding, Text: "Округл.:"}, d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding, MaxSize: d.Size{Width: 60}, OnCurrentIndexChanged: recalcChanges},
+									// 				d.Label{AssignTo: &sLabels.OptB9, Text: "b9:"}, d.LineEdit{Text: d.Bind("OptB9"), MaxLength: 3, MaxSize: d.Size{Width: 30}, ToolTipText: "Сумма: СНО(1-8) + X-отчет(16)", OnTextChanged: recalcChanges},
+									// 			},
+									// 		},
+									// 	},
+
 								},
 							},
 						},
@@ -934,9 +955,10 @@ func GetServiceTab() d.TabPage {
 										Columns: []d.TableViewColumn{
 											{Title: "#", Width: 30},
 											{Title: "Fmt", Width: 60},
-											{Title: "Текст", Width: 300},
+											{Title: "Текст", Width: 200},
 										},
-										MinSize:               d.Size{Width: 400, Height: 200},
+										MinSize:               d.Size{Width: 300, Height: 200},
+										MaxSize:               d.Size{Width: 300, Height: 200},
 										OnCurrentIndexChanged: onClicheSelectionChanged,
 									},
 									d.GroupBox{
@@ -944,6 +966,7 @@ func GetServiceTab() d.TabPage {
 										Title:    "Настройки строки",
 										Layout:   d.VBox{Margins: d.Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}, Spacing: 8},
 										Enabled:  false,
+										MaxSize:  d.Size{Width: 300, Height: 200},
 										DataBinder: d.DataBinder{
 											AssignTo:   &clicheEditorBinder,
 											DataSource: serviceModel.CurrentClicheLine,
