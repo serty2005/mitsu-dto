@@ -34,6 +34,12 @@ var (
 
 	// Элементы вкладки "Информация"
 	infoView *walk.TextEdit // Текстовое поле для инфо
+
+	// Элементы лога
+	logGroupBox      *walk.GroupBox
+	collapsedLogComp *walk.Composite
+	logPreviewLabel  *walk.Label
+	isLogExpanded    bool = true
 )
 
 // SetMainWindow позволяет установить главное окно извне (для debug режима).
@@ -57,9 +63,11 @@ func RunApp() error {
 	err := d.MainWindow{
 		AssignTo: &mw,
 		Title:    "Mitsu Driver Utility",
-		Size:     d.Size{Width: 600, Height: 600},
-		MinSize:  d.Size{Width: 600, Height: 500},
-		Layout:   d.VBox{MarginsZero: true, Spacing: 5},
+		// ИЗМЕНЕНО: Фиксируем размер окна (600x600)
+		Size:    d.Size{Width: 600, Height: 600},
+		MinSize: d.Size{Width: 600, Height: 600},
+		MaxSize: d.Size{Width: 600, Height: 600},
+		Layout:  d.VBox{MarginsZero: true, Spacing: 5},
 		Children: []d.Widget{
 			// --- Верхняя панель (Подключение + Инфо) ---
 			d.GroupBox{
@@ -163,18 +171,49 @@ func RunApp() error {
 				},
 			},
 
-			// --- Лог ---
-			d.GroupBox{
-				Title:   "Лог",
-				Layout:  d.VBox{MarginsZero: true},
-				MinSize: d.Size{Height: 150},
-				MaxSize: d.Size{Height: 200},
+			// --- Лог (Сворачиваемый) ---
+			d.Composite{
+				Layout: d.VBox{MarginsZero: true},
 				Children: []d.Widget{
-					d.TextEdit{
-						AssignTo: &logView,
-						ReadOnly: true,
-						VScroll:  true,
-						HScroll:  true,
+					// Развернутый вид
+					d.GroupBox{
+						AssignTo: &logGroupBox,
+						Title:    "Лог",
+						Layout:   d.VBox{MarginsZero: true},
+						MinSize:  d.Size{Height: 150},
+						MaxSize:  d.Size{Height: 200},
+						Children: []d.Widget{
+							d.Composite{
+								Layout: d.HBox{MarginsZero: true},
+								Children: []d.Widget{
+									d.HSpacer{},
+									d.PushButton{Text: "🔽 Свернуть", OnClicked: toggleLog, MaxSize: d.Size{Width: 80}},
+								},
+							},
+							d.TextEdit{
+								AssignTo: &logView,
+								ReadOnly: true,
+								VScroll:  true,
+								HScroll:  true,
+							},
+						},
+					},
+					// Свернутый вид
+					d.Composite{
+						AssignTo: &collapsedLogComp,
+						Visible:  false, // Скрыт по умолчанию
+						Layout:   d.HBox{Margins: d.Margins{Left: 5, Top: 2, Right: 5, Bottom: 2}},
+						Children: []d.Widget{
+							d.PushButton{Text: "🔼 Лог", OnClicked: toggleLog, MaxSize: d.Size{Width: 60}},
+							// ИЗМЕНЕНО: Добавлен EllipsisMode и MaxSize для предотвращения растягивания
+							d.Label{
+								AssignTo:      &logPreviewLabel,
+								Text:          "...",
+								TextAlignment: d.AlignNear,
+								EllipsisMode:  d.EllipsisEnd,      // Обрезать текст с конца "..."
+								MaxSize:       d.Size{Width: 500}, // Жесткий лимит ширины (600 - кнопка - отступы)
+							},
+						},
 					},
 				},
 			},
@@ -199,6 +238,22 @@ func RunApp() error {
 
 	mw.Run()
 	return nil
+}
+
+// toggleLog переключает видимость лога
+func toggleLog() {
+	isLogExpanded = !isLogExpanded
+
+	mw.SetSuspended(true)
+	defer mw.SetSuspended(false)
+
+	if isLogExpanded {
+		logGroupBox.SetVisible(true)
+		collapsedLogComp.SetVisible(false)
+	} else {
+		logGroupBox.SetVisible(false)
+		collapsedLogComp.SetVisible(true)
+	}
 }
 
 // --- Логика UI ---
@@ -631,9 +686,20 @@ func onFeedAndCut() {
 
 func logMsg(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	fullMsg := fmt.Sprintf("[%s] %s\r\n", time.Now().Format("15:04:05.000"), msg)
+	timestamp := time.Now().Format("15:04:05.000")
+	fullMsg := fmt.Sprintf("[%s] %s\r\n", timestamp, msg)
+
 	if mw != nil {
-		mw.Synchronize(func() { logView.AppendText(fullMsg) })
+		mw.Synchronize(func() {
+			// Обновляем основной лог
+			if logView != nil {
+				logView.AppendText(fullMsg)
+			}
+			// Обновляем превью для свернутого состояния
+			if logPreviewLabel != nil {
+				logPreviewLabel.SetText(fmt.Sprintf("[%s] %s", timestamp, msg))
+			}
+		})
 	} else {
 		log.Print(fullMsg)
 	}
