@@ -16,11 +16,12 @@ func ApplyChangesPipeline(changes []service.Change) {
 		return
 	}
 
-	// ЕСЛИ СПИСОК ИЗМЕНЕНИЙ ПУСТ (пользователь удалил все в диалоге)
+	// ЕСЛИ СПИСОК ИЗМЕНЕНИЙ ПУСТ (пользователь удалил всё в диалоге и нажал Применить)
 	if len(changes) == 0 {
 		mw.Synchronize(func() {
-			// Просто сбрасываем UI к состоянию "как было в ККТ"
-			onReadAllSettings()
+			// Восстанавливаем состояние из памяти
+			restoreViewFromSnapshot(serviceModel, initialSnapshot)
+			logMsg("[SYSTEM] Изменения отменены пользователем, возврат к исходным настройкам.")
 		})
 		return
 	}

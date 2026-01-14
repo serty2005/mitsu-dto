@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lxn/walk"
@@ -23,7 +24,6 @@ type NV struct {
 	Code string
 }
 
-// Списки значений для выпадающих меню
 // Списки значений для выпадающих меню
 var (
 	// ОФД Клиент
@@ -79,6 +79,7 @@ var (
 		{"Нет", "0"}, {"Текст", "1"}, {"Вся строка", "2"},
 	}
 )
+
 // -----------------------------
 // МОДЕЛИ ДАННЫХ КЛИШЕ
 // -----------------------------
@@ -216,7 +217,13 @@ type ServiceViewModel struct {
 	OptQRPos        string
 	OptRounding     string
 	OptDrawerTrig   string
-	OptB9           string
+
+	// Опция b9 (разделена на СНО и Флаг)
+	OptB9_BaseTax string // "0", "1"... (Value member)
+	OptB9_FullX   bool
+
+	// Доступные СНО для b9 (храним в модели, но обновляем виджет вручную)
+	OptB9_SNO []*NV
 
 	// Денежный ящик (остаются int, т.к. используются в NumberEdit)
 	DrawerPin  int
@@ -239,7 +246,9 @@ type ServiceLabels struct {
 	OfdAddr, OfdClient, TimerFN, TimerOFD, OismAddr, Timezone *walk.Label
 	LanIp, LanMask, LanGw, LanPort                            *walk.Label
 	// Options
-	OptQRPos, OptTextQR, OptCount, OptRounding, OptB9 *walk.Label
+	OptQRPos, OptTextQR, OptCount, OptRounding *walk.Label
+	// B9
+	OptB9_BaseTax, OptB9_FullX *walk.Label
 	// Cliche
 	ClicheHeader *walk.Label
 }
@@ -256,6 +265,9 @@ var (
 
 	// Элементы управления
 	btnServiceAction *walk.PushButton
+
+	// Специфичный контрол для b9, чтобы менять его Model вручную
+	b9ComboBox *walk.ComboBox
 
 	// Элементы для прямого доступа (Время)
 	kktTimeLabel *walk.Label
@@ -302,7 +314,6 @@ func joinHostPort(host string, port int) string {
 // ЛОГИКА СНАПШОТОВ И СРАВНЕНИЯ
 // -----------------------------
 
-// viewModelToSnapshot конвертирует текущую ViewModel в структуру Snapshot.
 // viewModelToSnapshot конвертирует текущую ViewModel в структуру Snapshot.
 func viewModelToSnapshot(vm *ServiceViewModel) *service.SettingsSnapshot {
 	s := service.NewSettingsSnapshot()
@@ -360,7 +371,19 @@ func viewModelToSnapshot(vm *ServiceViewModel) *service.SettingsSnapshot {
 	opts.B6 = boolToInt(vm.OptNearEnd)
 	opts.B7 = boolToInt(vm.OptTextQR)
 	opts.B8 = boolToInt(vm.OptCountInCheck)
-	opts.B9, _ = strconv.Atoi(vm.OptB9)
+
+	// В опции B9 содержится код базовой СНО + флаг полного Х-отчет (+16).
+	// Код СНО в b9 = 1..8.
+	b9Val := 0
+	if vm.OptB9_BaseTax != "" {
+		if v, err := strconv.Atoi(vm.OptB9_BaseTax); err == nil {
+			b9Val += v
+		}
+	}
+	if vm.OptB9_FullX {
+		b9Val += 16
+	}
+	opts.B9 = b9Val
 	s.Options = opts
 
 	// 8. Cliches
@@ -424,7 +447,6 @@ func recalcChanges() {
 		count := len(currentChanges)
 		if count > 0 {
 			btnServiceAction.SetText(fmt.Sprintf("Записать (%d)", count))
-			// Можно добавить визуальный акцент, если нужно
 		} else {
 			btnServiceAction.SetText("Считать")
 		}
@@ -439,7 +461,6 @@ func recalcChanges() {
 // highlightLabels проходит по списку изменений и делает начертание лейблов жирным.
 func highlightLabels(changes []service.Change) {
 	// Карта соответствия атомарных ID из компаратора к лейблам в UI.
-	// Используем **walk.Label, так как переменные в sLabels инициализируются декларативно.
 	labelMap := map[string][]**walk.Label{
 		"Printer_Model":    {&sLabels.PrinterModel},
 		"Printer_Baud":     {&sLabels.PrinterBaud},
@@ -455,7 +476,7 @@ func highlightLabels(changes []service.Change) {
 		"Opt_NearEnd":      {&sLabels.PrinterSound},
 		"Opt_TextQR":       {&sLabels.OptTextQR},
 		"Opt_CountInCheck": {&sLabels.OptCount},
-		"Opt_B9":           {&sLabels.OptB9},
+		"Opt_B9":           {&sLabels.OptB9_BaseTax, &sLabels.OptB9_FullX},
 		"Ofd_Addr":         {&sLabels.OfdAddr},
 		"Ofd_Client":       {&sLabels.OfdClient},
 		"Ofd_Timers":       {&sLabels.TimerFN, &sLabels.TimerOFD},
@@ -551,7 +572,7 @@ func onReadAllSettings() {
 	})
 
 	go func() {
-		// Читаем всё из ККТ (время, настройки, клише)
+		// Читаем всё из ККТ (время, настройки, клише, регистрацию)
 		t, _ := drv.GetDateTime()
 		ofd, _ := drv.GetOfdSettings()
 		oism, _ := drv.GetOismSettings()
@@ -560,6 +581,7 @@ func onReadAllSettings() {
 		cd, _ := drv.GetMoneyDrawerSettings()
 		opts, _ := drv.GetOptions()
 		tz, _ := drv.GetTimezone()
+		regData, _ := drv.GetRegistrationData()
 
 		allCliches := make(map[int][]driver.ClicheLineData)
 		for i := 1; i <= 4; i++ {
@@ -603,6 +625,43 @@ func onReadAllSettings() {
 				serviceModel.DrawerRise = cd.Rise
 				serviceModel.DrawerFall = cd.Fall
 			}
+
+			// --- Формирование списка доступных СНО для b9 ---
+			var taxList []*NV
+			// Добавляем пустой вариант
+			taxList = append(taxList, &NV{Name: "Не выбрано", Code: "0"})
+
+			if regData != nil && regData.TaxSystems != "" {
+				parts := strings.Split(regData.TaxSystems, ",")
+				taxNameMap := map[string]string{
+					"0": "ОСН", "1": "УСН доход", "2": "УСН д-р",
+					"3": "ЕНВД", "4": "ЕСХН", "5": "Патент",
+				}
+				for _, p := range parts {
+					p = strings.TrimSpace(p)
+					if p == "" {
+						continue
+					}
+
+					name, ok := taxNameMap[p]
+					if !ok {
+						name = "СНО #" + p
+					}
+
+					// Конвертация: Code(1062) -> Code(b9) = Code(1062) + 1
+					if codeInt, err := strconv.Atoi(p); err == nil {
+						b9Code := strconv.Itoa(codeInt + 1)
+						taxList = append(taxList, &NV{Name: name, Code: b9Code})
+					}
+				}
+			}
+			serviceModel.OptB9_SNO = taxList
+
+			// Обновляем виджет ComboBox вручную
+			if b9ComboBox != nil {
+				b9ComboBox.SetModel(taxList)
+			}
+
 			serviceModel.OptTimezone = strconv.Itoa(tz)
 			if opts != nil {
 				serviceModel.OptQRPos = fmt.Sprintf("%d", opts.B1)
@@ -613,7 +672,11 @@ func onReadAllSettings() {
 				serviceModel.OptNearEnd = (opts.B6 == 1)
 				serviceModel.OptTextQR = (opts.B7 == 1)
 				serviceModel.OptCountInCheck = (opts.B8 == 1)
-				serviceModel.OptB9 = fmt.Sprintf("%d", opts.B9)
+
+				// Парсинг b9
+				serviceModel.OptB9_FullX = (opts.B9 & 16) != 0
+				taxVal := opts.B9 & 0x0F
+				serviceModel.OptB9_BaseTax = strconv.Itoa(taxVal)
 			}
 
 			// 3. Обновляем клише (текущий выбранный тип)
@@ -741,7 +804,9 @@ func GetServiceTab() d.TabPage {
 		OptRounding:        "0",
 		OptDrawerTrig:      "1",
 		OptCut:             true,
-		OptB9:              "0",
+		OptB9_FullX:        false,
+		OptB9_BaseTax:      "0",
+		OptB9_SNO:          []*NV{{Name: "Не выбрано", Code: "0"}},
 		OfdClient:          "1",
 		SelectedClicheType: "1",
 		CurrentClicheLine:  &ClicheItem{},
@@ -760,7 +825,7 @@ func GetServiceTab() d.TabPage {
 
 	return d.TabPage{
 		Title:  "Сервис",
-		Layout: d.VBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 5},
+		Layout: d.VBox{MarginsZero: true, Spacing: 5},
 		Children: []d.Widget{
 
 			// ВЕРХ: Время и Операции
@@ -816,7 +881,7 @@ func GetServiceTab() d.TabPage {
 						Layout: d.VBox{MarginsZero: true, Spacing: 0, Alignment: d.AlignHNearVNear},
 						Children: []d.Widget{
 							d.Composite{
-								Layout: d.HBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 4, Alignment: d.AlignHNearVNear},
+								Layout: d.HBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 4, Alignment: d.AlignHCenterVCenter},
 								Children: []d.Widget{
 
 									// КОЛОНКА 1
@@ -889,39 +954,26 @@ func GetServiceTab() d.TabPage {
 													d.Label{AssignTo: &sLabels.OptTextQR, Text: "Текст QR:"}, d.CheckBox{Checked: d.Bind("OptTextQR"), OnCheckStateChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.OptCount, Text: "Покупок:"}, d.CheckBox{Checked: d.Bind("OptCountInCheck"), OnCheckStateChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.OptRounding, Text: "Округл.:"}, d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding, MaxSize: d.Size{Width: 60}, OnCurrentIndexChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.OptB9, Text: "b9:"}, d.LineEdit{Text: d.Bind("OptB9"), MaxLength: 3, MaxSize: d.Size{Width: 30}, ToolTipText: "Сумма: СНО(1-8) + X-отчет(16)", OnTextChanged: recalcChanges},
+
+													// ИЗМЕНЕНО: Новые контролы для b9
+													d.Label{AssignTo: &sLabels.OptB9_FullX, Text: "X-Отчет:"},
+													d.CheckBox{Text: "Полный", Checked: d.Bind("OptB9_FullX"), ToolTipText: "Печатать полный X-отчет (b9 & 16)", OnCheckStateChanged: recalcChanges},
+
+													d.Label{AssignTo: &sLabels.OptB9_BaseTax, Text: "Баз. СНО:"},
+													d.ComboBox{
+														AssignTo:              &b9ComboBox, // Прямая ссылка для ручного обновления модели
+														Value:                 d.Bind("OptB9_BaseTax"),
+														BindingMember:         "Code",
+														DisplayMember:         "Name",
+														Model:                 serviceModel.OptB9_SNO, // Статическая инициализация
+														MinSize:               d.Size{Width: 100},
+														ToolTipText:           "Система налогообложения по умолчанию",
+														OnCurrentIndexChanged: recalcChanges,
+													},
 												},
 											},
 										},
 									},
-
-									// КОЛОНКА 3
-									// d.Composite{
-									// 	Layout: d.VBox{MarginsZero: true, Spacing: 4},
-									// 	Children: []d.Widget{
-									// 		d.GroupBox{
-									// 			Title:  "Сеть (LAN)",
-									// 			Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
-									// 			Children: []d.Widget{
-									// 				d.Label{AssignTo: &sLabels.LanIp, Text: "IP:"}, d.LineEdit{Text: d.Bind("LanAddr"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
-									// 				d.Label{AssignTo: &sLabels.LanMask, Text: "Mask:"}, d.LineEdit{Text: d.Bind("LanMask"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
-									// 				d.Label{AssignTo: &sLabels.LanGw, Text: "GW:"}, d.LineEdit{Text: d.Bind("LanGw"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
-									// 				d.Label{AssignTo: &sLabels.LanPort, Text: "Port:"}, d.NumberEdit{Value: d.Bind("LanPort"), MaxSize: d.Size{Width: 60}, OnValueChanged: recalcChanges},
-									// 			},
-									// 		},
-									// 		d.GroupBox{
-									// 			Title:  "Вид чека и Опции",
-									// 			Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
-									// 			Children: []d.Widget{
-									// 				d.Label{AssignTo: &sLabels.OptQRPos, Text: "QR:"}, d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos, MaxSize: d.Size{Width: 80}, OnCurrentIndexChanged: recalcChanges},
-									// 				d.Label{AssignTo: &sLabels.OptTextQR, Text: "Текст QR:"}, d.CheckBox{Checked: d.Bind("OptTextQR"), OnCheckStateChanged: recalcChanges},
-									// 				d.Label{AssignTo: &sLabels.OptCount, Text: "Покупок:"}, d.CheckBox{Checked: d.Bind("OptCountInCheck"), OnCheckStateChanged: recalcChanges},
-									// 				d.Label{AssignTo: &sLabels.OptRounding, Text: "Округл.:"}, d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding, MaxSize: d.Size{Width: 60}, OnCurrentIndexChanged: recalcChanges},
-									// 				d.Label{AssignTo: &sLabels.OptB9, Text: "b9:"}, d.LineEdit{Text: d.Bind("OptB9"), MaxLength: 3, MaxSize: d.Size{Width: 30}, ToolTipText: "Сумма: СНО(1-8) + X-отчет(16)", OnTextChanged: recalcChanges},
-									// 			},
-									// 		},
-									// 	},
-
 								},
 							},
 						},
@@ -933,20 +985,20 @@ func GetServiceTab() d.TabPage {
 						Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 5},
 						Children: []d.Widget{
 							d.Composite{
-								Layout: d.HBox{MarginsZero: true, Alignment: d.AlignHNearVCenter},
+								Layout: d.HBox{MarginsZero: true, Alignment: d.AlignHCenterVCenter},
 								Children: []d.Widget{
 									d.Label{AssignTo: &sLabels.ClicheHeader, Text: "Редактировать:"},
 									d.ComboBox{
 										Value:         d.Bind("SelectedClicheType"),
 										Model:         listClicheTypes,
 										BindingMember: "Code", DisplayMember: "Name",
-										MinSize:               d.Size{Width: 200},
-										OnCurrentIndexChanged: onClicheTypeSwitched, // Специальный обработчик
+										MinSize:               d.Size{Width: 100},
+										OnCurrentIndexChanged: onClicheTypeSwitched,
 									},
 								},
 							},
 							d.Composite{
-								Layout: d.HBox{MarginsZero: true, Spacing: 10},
+								Layout: d.HBox{MarginsZero: true, Spacing: 5},
 								Children: []d.Widget{
 									d.TableView{
 										AssignTo:         &clicheTable,
@@ -1055,11 +1107,92 @@ func GetServiceTab() d.TabPage {
 // ЛОГИКА ИНТЕРФЕЙСА (Event Handlers)
 // -----------------------------
 
+// restoreViewFromSnapshot восстанавливает значения в ViewModel из предоставленного снапшота.
+func restoreViewFromSnapshot(vm *ServiceViewModel, snap *service.SettingsSnapshot) {
+	if snap == nil {
+		return
+	}
+
+	// Блокируем триггеры recalcChanges
+	isLoadingData = true
+	defer func() {
+		isLoadingData = false
+		recalcChanges() // Пересчитываем, чтобы сбросить флаги изменений и кнопки
+	}()
+
+	// 1. ОФД
+	vm.OfdString = joinHostPort(snap.Ofd.Addr, snap.Ofd.Port)
+	vm.OfdClient = snap.Ofd.Client
+	vm.TimerFN = snap.Ofd.TimerFN
+	vm.TimerOFD = snap.Ofd.TimerOFD
+
+	// 2. ОИСМ
+	vm.OismString = joinHostPort(snap.Oism.Addr, snap.Oism.Port)
+
+	// 3. LAN
+	vm.LanAddr = snap.Lan.Addr
+	vm.LanPort = snap.Lan.Port
+	vm.LanMask = snap.Lan.Mask
+	vm.LanDns = snap.Lan.Dns
+	vm.LanGw = snap.Lan.Gw
+
+	// 4. Timezone
+	vm.OptTimezone = strconv.Itoa(snap.Timezone)
+
+	// 5. Принтер
+	vm.PrintModel = snap.Printer.Model
+	vm.PrintBaud = strconv.Itoa(snap.Printer.BaudRate)
+	vm.PrintPaper = strconv.Itoa(snap.Printer.Paper)
+	vm.PrintFont = strconv.Itoa(snap.Printer.Font)
+
+	// 6. Денежный ящик
+	vm.DrawerPin = snap.Drawer.Pin
+	vm.DrawerRise = snap.Drawer.Rise
+	vm.DrawerFall = snap.Drawer.Fall
+
+	// 7. Опции
+	vm.OptQRPos = strconv.Itoa(snap.Options.B1)
+	vm.OptRounding = strconv.Itoa(snap.Options.B2)
+	vm.OptCut = (snap.Options.B3 == 1)
+	vm.OptAutoTest = (snap.Options.B4 == 1)
+	vm.OptDrawerTrig = strconv.Itoa(snap.Options.B5)
+	vm.OptNearEnd = (snap.Options.B6 == 1)
+	vm.OptTextQR = (snap.Options.B7 == 1)
+	vm.OptCountInCheck = (snap.Options.B8 == 1)
+
+	// Восстановление b9
+	vm.OptB9_FullX = (snap.Options.B9 & 16) != 0
+	taxVal := snap.Options.B9 & 0x0F
+	vm.OptB9_BaseTax = strconv.Itoa(taxVal)
+
+	// 8. Клише (восстанавливаем текущий отображаемый тип)
+	curType, _ := strconv.Atoi(vm.SelectedClicheType)
+	lines := snap.Cliches[curType]
+	for i := 0; i < 10; i++ {
+		if i < len(lines) {
+			vm.ClicheItems[i].Text = lines[i].Text
+			vm.ClicheItems[i].Format = lines[i].Format
+		} else {
+			vm.ClicheItems[i].Text = ""
+			vm.ClicheItems[i].Format = "000000"
+		}
+		vm.ClicheItems[i].ParseFormatString()
+	}
+
+	// Обновляем визуальное состояние
+	if serviceBinder != nil {
+		serviceBinder.Reset()
+	}
+	if clicheModel != nil {
+		clicheModel.PublishRowsReset()
+	}
+}
+
 func checkOfdClientChange() {
 	if isLoadingData {
 		return
 	}
-	recalcChanges() // Сразу вызываем пересчет
+	recalcChanges()
 
 	if serviceModel.OfdClient == "0" {
 		res := walk.MsgBox(mw, "Подтверждение",
@@ -1080,18 +1213,11 @@ func onClicheTypeSwitched() {
 	if isLoadingData || initialSnapshot == nil {
 		return
 	}
-	// Сохраняем состояние предыдущего выбора в currentSnapshot (это делает viewModelToSnapshot)
-	// и загружаем новый выбор в UI.
-	// 1. Сначала коммитим текущие изменения в currentSnapshot (через recalc)
 	recalcChanges()
 
-	// 2. Теперь загружаем данные для НОВОГО типа из currentSnapshot в ViewModel
 	newType, _ := strconv.Atoi(serviceModel.SelectedClicheType)
-
-	// В currentSnapshot уже хранятся актуальные данные для всех типов (т.к. мы делали DeepCopy при инициализации и обновляем в viewModelToSnapshot)
 	lines := currentSnapshot.Cliches[newType]
 
-	// Заполняем ViewModel данными из снапшота
 	for i := 0; i < 10; i++ {
 		if i < len(lines) {
 			serviceModel.ClicheItems[i].Text = lines[i].Text
@@ -1109,27 +1235,14 @@ func onClicheTypeSwitched() {
 	}
 }
 
-// -----------------------------
-// ЛОГИКА ЗАПИСИ
-// -----------------------------
-
 func onWriteAllParameters() {
-	// Если нет изменений, выходим (кнопка должна быть disabled, но на всякий случай)
 	if len(currentChanges) == 0 {
 		return
 	}
-
-	// 1. Показываем диалог со списком изменений
 	confirmed, finalChanges := RunDiffDialog(mw, currentChanges)
 	if !confirmed {
 		return
 	}
-
-	if len(finalChanges) == 0 {
-		return // Пользователь удалил все строки и нажал ОК
-	}
-
-	// 2. Запускаем пайплайн применения
 	ApplyChangesPipeline(finalChanges)
 }
 
@@ -1138,13 +1251,11 @@ func onTechReset() {
 	if drv == nil {
 		return
 	}
-
 	if walk.MsgBox(mw, "ВНИМАНИЕ",
-		"Выполнить ТЕХНОЛОГИЧЕСКОЕ ОБНУЛЕНИЕ?\nЭто может привести к сбросу настроек и потере данных в ОЗУ.",
+		"Выполнить ТЕХНОЛОГИЧЕСКОЕ ОБНУЛЕНИЕ?\nЭто полностью очистит настройки ККТ.",
 		walk.MsgBoxYesNo|walk.MsgBoxIconWarning) != walk.DlgCmdYes {
 		return
 	}
-
 	go func() {
 		err := drv.TechReset()
 		mw.Synchronize(func() {
@@ -1152,7 +1263,7 @@ func onTechReset() {
 				walk.MsgBox(mw, "Ошибка", "Сбой тех. обнуления: "+err.Error(), walk.MsgBoxIconError)
 			} else {
 				walk.MsgBox(mw, "Успех", "Технологическое обнуление выполнено.", walk.MsgBoxIconInformation)
-				onReadAllSettings() // Перечитываем всё
+				onReadAllSettings()
 			}
 		})
 	}()
@@ -1226,10 +1337,6 @@ func onMGMReset() {
 	go func() { drv.ResetMGM() }()
 }
 
-// -----------------------------
-// ЛОГИКА КЛИШЕ (НОВАЯ)
-// -----------------------------
-
 func onClicheSelectionChanged() {
 	idx := clicheTable.CurrentIndex()
 	if idx < 0 {
@@ -1249,7 +1356,6 @@ func reloadEditor(idx int) {
 }
 
 func onClicheItemChanged() {
-	// При любом изменении в редакторе пересчитываем формат и изменения
 	idx := clicheTable.CurrentIndex()
 	if idx >= 0 {
 		item := serviceModel.ClicheItems[idx]
