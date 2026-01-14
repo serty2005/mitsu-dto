@@ -213,6 +213,7 @@ type ServiceViewModel struct {
 
 	// --- Клише ---
 	SelectedClicheType string               // "1".."4"
+	LastSelectedType   string               // Для сохранения предыдущего состояния при переключении
 	ClicheItems        []*ClicheItemWrapper // 10 строк
 	CurrentClicheLine  *ClicheItemWrapper   // Указатель на редактируемую строку
 	// TempClicheLine - временный объект для редактирования.
@@ -501,19 +502,10 @@ func highlightLabels(changes []service.Change) {
 			setBold(lblPtr, false)
 		}
 	}
-	if sLabels.ClicheHeader != nil {
-		setBold(&sLabels.ClicheHeader, false)
-	}
 
 	// 2. Устанавливаем жирное начертание для измененных параметров
 	for _, ch := range changes {
-		// Обработка клише (динамический ID)
-		if len(ch.ID) > 7 && ch.ID[:7] == "Cliche_" {
-			if sLabels.ClicheHeader != nil {
-				setBold(&sLabels.ClicheHeader, true)
-			}
-			continue
-		}
+		// ИСПРАВЛЕНО: Удалена подсветка ClicheHeader (Cliche_...)
 
 		// Остальные параметры по карте
 		if labels, ok := labelMap[ch.ID]; ok {
@@ -671,8 +663,12 @@ func onReadAllSettings() {
 				serviceModel.OptB9_BaseTax = strconv.Itoa(taxVal)
 			}
 
-			// 3. Обновляем клише (ОБНОВЛЕНО)
-			curType, _ := strconv.Atoi(serviceModel.SelectedClicheType)
+			// 3. Обновляем клише
+			// Сбрасываем выбор на первый тип
+			serviceModel.SelectedClicheType = "1"
+			serviceModel.LastSelectedType = "1" // Инициализируем трекинг
+
+			curType := 1
 			lines := allCliches[curType]
 
 			for i := 0; i < 10; i++ {
@@ -695,17 +691,39 @@ func onReadAllSettings() {
 				}
 			}
 
-			// 4. Сначала обновляем СНАПШОТЫ, чтобы StyleCell имел доступ к данным
-			tempSnap := viewModelToSnapshot(serviceModel)
-			tempSnap.Cliches = allCliches
+			// 4. Сначала обновляем СНАПШОТЫ
+			// ВАЖНО: Делаем глубокую копию карты клише, чтобы initialSnapshot и currentSnapshot
+			// не ссылались на одну и ту же карту allCliches.
 
+			tempSnap := viewModelToSnapshot(serviceModel)
+
+			// Создаем две НЕЗАВИСИМЫЕ копии карты клише
+			initCliches := make(map[int][]driver.ClicheLineData)
+			currCliches := make(map[int][]driver.ClicheLineData)
+
+			for k, v := range allCliches {
+				dst1 := make([]driver.ClicheLineData, len(v))
+				copy(dst1, v)
+				initCliches[k] = dst1
+
+				dst2 := make([]driver.ClicheLineData, len(v))
+				copy(dst2, v)
+				currCliches[k] = dst2
+			}
+
+			// Назначаем разные карты разным снапшотам
 			initialSnapshot = tempSnap
-			currentSnapshot = tempSnap
+			initialSnapshot.Cliches = initCliches
+
+			// Создаем копию структуры для currentSnapshot
+			currentSnapshotCopy := *tempSnap
+			currentSnapshot = &currentSnapshotCopy
+			currentSnapshot.Cliches = currCliches
+
 			currentChanges = nil
 
 			// 5. Теперь безопасно обновлять таблицу и принудительно перерисовывать
 			clicheModel.PublishRowsReset()
-			// ИСПРАВЛЕНО: Принудительная перерисовка таблицы
 			if clicheTable != nil {
 				clicheTable.Invalidate()
 			}
@@ -815,6 +833,7 @@ func GetServiceTab() d.TabPage {
 		OptB9_SNO:          []*NV{{Name: "Не выбрано", Code: "0"}},
 		OfdClient:          "1",
 		SelectedClicheType: "1",
+		LastSelectedType:   "1", // ДОБАВЛЕНО
 		CurrentClicheLine:  &ClicheItemWrapper{},
 		TempClicheLine:     &ClicheItemWrapper{Line: cliche.Line{Format: "000000", Props: cliche.DefaultProps()}},
 	}
@@ -1284,24 +1303,64 @@ func checkOfdClientChange() {
 
 func onClicheTypeSwitched() {
 	if isLoadingData || initialSnapshot == nil {
+		// Просто обновляем трекинг, если мы в процессе загрузки
+		serviceModel.LastSelectedType = serviceModel.SelectedClicheType
 		return
 	}
-	recalcChanges()
 
+	// 1. ПРИНУДИТЕЛЬНО ЗАБИРАЕМ ДАННЫЕ ИЗ UI В МОДЕЛЬ
+	// ВАЖНО: Без этого SelectedClicheType содержит СТАРОЕ значение, так как событие
+	// OnCurrentIndexChanged срабатывает ДО автоматического Submit биндинга.
+	if err := serviceBinder.Submit(); err != nil {
+		logMsg("[CLICHE] Ошибка Submit: %v", err)
+		return
+	}
+
+	prevType, _ := strconv.Atoi(serviceModel.LastSelectedType)
 	newType, _ := strconv.Atoi(serviceModel.SelectedClicheType)
-	lines := currentSnapshot.Cliches[newType]
+
+	// Если типы совпадают (или не изменились после Submit), ничего не делаем
+	if prevType == newType {
+		return
+	}
+	// Защита от некорректных значений
+	if prevType < 1 {
+		prevType = 1
+	}
+	if newType < 1 {
+		newType = 1
+	}
+
+	// logMsg("[CLICHE] Переключение типа: %d -> %d", prevType, newType)
+
+	// 2. СОХРАНЯЕМ ТЕКУЩЕЕ СОСТОЯНИЕ UI В СНАПШОТ (Slot PREV)
+	// Данные в таблице сейчас относятся к prevType. Сохраняем их в currentSnapshot.
+	var linesToSave []driver.ClicheLineData
+	for _, item := range serviceModel.ClicheItems {
+		item.updateFormat() // Синхронизируем Format из Props
+		linesToSave = append(linesToSave, driver.ClicheLineData{
+			Text:   item.Line.Text,
+			Format: item.Line.Format,
+		})
+	}
+	currentSnapshot.Cliches[prevType] = linesToSave
+
+	// 3. ЗАГРУЖАЕМ НОВЫЕ ДАННЫЕ ИЗ СНАПШОТА В UI (Slot NEW)
+	// Берем данные для нового типа из currentSnapshot (там либо исходные, либо уже измененные)
+	newLines := currentSnapshot.Cliches[newType]
 
 	for i := 0; i < 10; i++ {
 		var text, format string
-		if i < len(lines) {
-			text = lines[i].Text
-			format = lines[i].Format
+		// Если данных меньше 10 строк, заполняем пустыми
+		if i < len(newLines) {
+			text = newLines[i].Text
+			format = newLines[i].Format
 		} else {
 			text = ""
 			format = "000000"
 		}
 
-		// Заполняем структуру Line внутри Wrapper, используя парсер
+		// Обновляем обертки строк (pointers in slice remain same, content changes)
 		serviceModel.ClicheItems[i].Line = cliche.Line{
 			Text:   text,
 			Format: format,
@@ -1309,11 +1368,23 @@ func onClicheTypeSwitched() {
 		}
 	}
 
+	// 4. ОБНОВЛЯЕМ ТРЕКИНГ
+	serviceModel.LastSelectedType = serviceModel.SelectedClicheType
+
+	// 5. ОБНОВЛЯЕМ ТАБЛИЦУ
 	clicheModel.PublishRowsReset()
-	// Если была выбрана строка для редактирования, перезагружаем редактор
-	if idx := clicheTable.CurrentIndex(); idx >= 0 {
-		reloadEditor(idx)
+	if clicheTable != nil {
+		clicheTable.Invalidate()
 	}
+
+	// 6. СБРАСЫВАЕМ РЕДАКТОР
+	clicheEditorGroup.SetEnabled(false)
+	clicheEditorGroup.SetTitle("Настройки строки")
+
+	// 7. ПЕРЕСЧИТЫВАЕМ ИЗМЕНЕНИЯ
+	// Теперь в UI загружен newType, а в currentSnapshot сохранен prevType.
+	// recalcChanges соберет полный снапшот корректно.
+	recalcChanges()
 }
 
 func onWriteAllParameters() {
@@ -1513,7 +1584,7 @@ func onApplyClicheLine() {
 	}
 	recalcChanges()
 
-	logMsg("Строка %d обновлена в памяти: %s (Format: %s)", idx+1, newText, serviceModel.TempClicheLine.Line.Format)
+	// logMsg("Строка %d обновлена в памяти: %s (Format: %s)", idx+1, newText, serviceModel.TempClicheLine.Line.Format)
 }
 
 func onClicheSelectionChanged() {

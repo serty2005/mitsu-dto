@@ -137,24 +137,20 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 		})
 	}
 
-	// --- 8. КЛИШЕ (Построчное сравнение) ---
+	// --- 8. КЛИШЕ (Построчное сравнение и запись) ---
+	// ИЗМЕНЕНО: Теперь генерируем отдельные команды для каждой строки, которая изменилась
+	// и не является пустой.
 	clicheNames := map[int]string{1: "Заголовок", 2: "После пользователя", 3: "Подвал", 4: "Конец чека"}
 
 	for typeID := 1; typeID <= 4; typeID++ {
 		oldLines := initial.Cliches[typeID]
 		newLines := current.Cliches[typeID]
 
-		// Получаем максимальную длину, чтобы проверить все строки (обычно 10)
+		// Получаем максимальную длину, чтобы проверить все строки
 		maxLen := len(oldLines)
 		if len(newLines) > maxLen {
 			maxLen = len(newLines)
 		}
-
-		// Для замыкания в ApplyFunc нам нужен ВЕСЬ массив новых строк данного типа,
-		// так как команда SET HEADER перезаписывает группу целиком.
-		// Мы берем состояние из currentSnapshot.
-		finalBlockState := make([]driver.ClicheLineData, len(newLines))
-		copy(finalBlockState, newLines)
 
 		for i := 0; i < maxLen; i++ {
 			var oldL, newL driver.ClicheLineData
@@ -165,25 +161,33 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 				newL = newLines[i]
 			}
 
-			// Сравниваем текст и формат
+			// Проверяем изменение
 			if oldL.Text != newL.Text || oldL.Format != newL.Format {
-				tid := typeID
+				// ВАЖНО: Пропускаем пустые строки согласно требованию
+				// "не отправлять нулевые и неизменённые строки"
+				if newL.Text == "" {
+					continue
+				}
 
-				// Формируем описание: Было: "fmt-text" Стало: "fmt-text"
+				tid := typeID
+				lineNum := i
+				// Замыкаем значения для ApplyFunc
+				finalText := newL.Text
+				finalFormat := newL.Format
+
+				// Формируем описание для диалога
 				oldVal := fmt.Sprintf("\"%s-%s\"", oldL.Format, oldL.Text)
 				newVal := fmt.Sprintf("\"%s-%s\"", newL.Format, newL.Text)
 
 				changes = append(changes, Change{
-					// Уникальный ID для строки: Cliche_Тип_НомерСтроки
-					ID:          fmt.Sprintf("Cliche_%d_%d", tid, i),
-					Description: fmt.Sprintf("Клише \"%s\", Строка %d", clicheNames[tid], i+1),
+					ID:          fmt.Sprintf("Cliche_%d_%d", tid, lineNum),
+					Description: fmt.Sprintf("Клише \"%s\", Строка %d", clicheNames[tid], lineNum+1),
 					OldValue:    oldVal,
 					NewValue:    newVal,
 					Priority:    PriorityCliche,
 					ApplyFunc: func(d driver.Driver) error {
-						// ВАЖНО: Пишем весь блок целиком, так как запись одной строки стирает последующие.
-						// Используем сохраненный finalBlockState.
-						return d.SetHeader(tid, finalBlockState)
+						// Вызываем атомарную команду записи строки
+						return d.SetHeaderLine(tid, lineNum, finalText, finalFormat)
 					},
 				})
 			}

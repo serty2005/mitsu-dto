@@ -40,6 +40,7 @@ type Driver interface {
 	SetPrinterSettings(settings PrinterSettings) error
 	SetMoneyDrawerSettings(settings DrawerSettings) error
 	SetHeader(headerNum int, lines []ClicheLineData) error
+	SetHeaderLine(headerNum int, lineNum int, text string, format string) error
 	SetLanSettings(settings LanSettings) error
 	SetOfdSettings(settings OfdSettings) error
 	SetOismSettings(settings ServerSettings) error
