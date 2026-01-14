@@ -11,6 +11,7 @@ import (
 	d "github.com/lxn/walk/declarative"
 
 	"mitsuscanner/driver"
+	"mitsuscanner/internal/cliche"
 	"mitsuscanner/internal/service"
 )
 
@@ -60,7 +61,7 @@ var (
 		{"UTC+2 (Клд)", "2"}, {"UTC+3 (Мск)", "3"}, {"UTC+4 (Смр)", "4"},
 		{"UTC+5 (Екб)", "5"}, {"UTC+6 (Омск)", "6"}, {"UTC+7 (Крсн)", "7"},
 		{"UTC+8 (Ирк)", "8"}, {"UTC+9 (Якт)", "9"}, {"UTC+10 (Влд)", "10"},
-		{"UTC+11 (Маг)", "11"}, {"UTC+12 (Кам)", "12"},
+		{"UTC+11 (Маг)", "11"}, {"UTC+12 (Кам)", "12"}, {"Не настроено", "254"},
 	}
 
 	listClicheTypes = []*NV{
@@ -84,79 +85,56 @@ var (
 // МОДЕЛИ ДАННЫХ КЛИШЕ
 // -----------------------------
 
-// ClicheItem представляет одну строку клише для GUI.
-type ClicheItem struct {
-	Index  int
-	Text   string
-	Format string // Сырой формат "xxxxxx"
-
-	// Поля для редактирования (разбор Format)
-	Invert    bool
-	Width     int
-	Height    int
-	Font      string // "0", "1", "2"
-	Underline string // "0", "1", "2"
-	Align     string // "0", "1", "2"
+// ClicheItemWrapper обертка над internal/cliche.Line для GUI.
+// Walk требует конкретных типов полей для DataBinding.
+type ClicheItemWrapper struct {
+	Index int
+	Line  cliche.Line
 }
 
-// ParseFormatString разбирает строку формата "xxxxxx" в поля структуры.
-func (c *ClicheItem) ParseFormatString() {
-	runes := []rune(c.Format)
-	// Добиваем нулями если короткая
-	for len(runes) < 6 {
-		runes = append(runes, '0')
-	}
+// Геттеры/Сеттеры для DataBinder, чтобы мапить поля формы на cliche.Props
 
-	c.Invert = (runes[0] == '1')
-	c.Width, _ = strconv.Atoi(string(runes[1]))
-	c.Height, _ = strconv.Atoi(string(runes[2]))
-	c.Font = string(runes[3])
-	c.Underline = string(runes[4])
-	c.Align = string(runes[5])
+func (c *ClicheItemWrapper) Text() string     { return c.Line.Text }
+func (c *ClicheItemWrapper) SetText(v string) { c.Line.Text = v }
+
+func (c *ClicheItemWrapper) Format() string { return c.Line.Format }
+
+func (c *ClicheItemWrapper) Invert() bool     { return c.Line.Props.Invert }
+func (c *ClicheItemWrapper) SetInvert(v bool) { c.Line.Props.Invert = v; c.updateFormat() }
+
+func (c *ClicheItemWrapper) Width() int     { return c.Line.Props.Width }
+func (c *ClicheItemWrapper) SetWidth(v int) { c.Line.Props.Width = v; c.updateFormat() }
+
+func (c *ClicheItemWrapper) Height() int     { return c.Line.Props.Height }
+func (c *ClicheItemWrapper) SetHeight(v int) { c.Line.Props.Height = v; c.updateFormat() }
+
+// Для ComboBox используем string
+func (c *ClicheItemWrapper) Font() string { return strconv.Itoa(c.Line.Props.Font) }
+func (c *ClicheItemWrapper) SetFont(v string) {
+	c.Line.Props.Font, _ = strconv.Atoi(v)
+	c.updateFormat()
 }
 
-// UpdateFormatString собирает строку формата "xxxxxx" из полей структуры.
-func (c *ClicheItem) UpdateFormatString() {
-	inv := "0"
-	if c.Invert {
-		inv = "1"
-	}
-
-	// Лимиты размеров 0..8 (хотя протокол позволяет 1-8, 0-дефолт)
-	w := c.Width
-	if w < 0 {
-		w = 0
-	}
-	if w > 8 {
-		w = 8
-	}
-
-	h := c.Height
-	if h < 0 {
-		h = 0
-	}
-	if h > 8 {
-		h = 8
-	}
-
-	c.Format = fmt.Sprintf("%s%d%d%s%s%s",
-		inv, w, h,
-		ensureChar(c.Font),
-		ensureChar(c.Underline),
-		ensureChar(c.Align))
+func (c *ClicheItemWrapper) Underline() string { return strconv.Itoa(c.Line.Props.Underline) }
+func (c *ClicheItemWrapper) SetUnderline(v string) {
+	c.Line.Props.Underline, _ = strconv.Atoi(v)
+	c.updateFormat()
 }
 
-func ensureChar(s string) string {
-	if len(s) == 0 {
-		return "0"
-	}
-	return string(s[0])
+func (c *ClicheItemWrapper) Align() string { return strconv.Itoa(c.Line.Props.Align) }
+func (c *ClicheItemWrapper) SetAlign(v string) {
+	c.Line.Props.Align, _ = strconv.Atoi(v)
+	c.updateFormat()
+}
+
+func (c *ClicheItemWrapper) updateFormat() {
+	c.Line.Format = cliche.BuildFormat(c.Line.Props)
 }
 
 // ClicheModel - модель для TableView.
 type ClicheModel struct {
 	walk.TableModelBase
-	Items []*ClicheItem
+	Items []*ClicheItemWrapper
 }
 
 func (m *ClicheModel) RowCount() int {
@@ -164,14 +142,17 @@ func (m *ClicheModel) RowCount() int {
 }
 
 func (m *ClicheModel) Value(row, col int) interface{} {
+	if row >= len(m.Items) {
+		return ""
+	}
 	item := m.Items[row]
 	switch col {
 	case 0:
 		return item.Index + 1 // Номер строки 1..10
 	case 1:
-		return item.Format
+		return item.Line.Format
 	case 2:
-		return item.Text
+		return item.Line.Text
 	}
 	return ""
 }
@@ -231,9 +212,12 @@ type ServiceViewModel struct {
 	DrawerFall int
 
 	// --- Клише ---
-	SelectedClicheType string        // "1".."4"
-	ClicheItems        []*ClicheItem // 10 строк
-	CurrentClicheLine  *ClicheItem   // Указатель на редактируемую строку
+	SelectedClicheType string               // "1".."4"
+	ClicheItems        []*ClicheItemWrapper // 10 строк
+	CurrentClicheLine  *ClicheItemWrapper   // Указатель на редактируемую строку
+	// TempClicheLine - временный объект для редактирования.
+	// Данные из него попадают в ClicheItems только по кнопке "Применить".
+	TempClicheLine *ClicheItemWrapper
 }
 
 // ServiceLabels хранит ссылки на лейблы для выделения жирным шрифтом
@@ -285,6 +269,11 @@ var (
 	clicheModel        *ClicheModel
 	clicheEditorGroup  *walk.GroupBox
 	clicheEditorBinder *walk.DataBinder
+
+	ceText                   *walk.LineEdit
+	ceAlign, ceFont, ceUnder *walk.ComboBox
+	ceWidth, ceHeight        *walk.NumberEdit
+	ceInvert                 *walk.CheckBox
 )
 
 // -----------------------------
@@ -387,6 +376,7 @@ func viewModelToSnapshot(vm *ServiceViewModel) *service.SettingsSnapshot {
 	s.Options = opts
 
 	// 8. Cliches
+	// Копируем остальные типы из текущего снапшота, чтобы не потерять их
 	if currentSnapshot != nil {
 		for k, v := range currentSnapshot.Cliches {
 			dst := make([]driver.ClicheLineData, len(v))
@@ -397,11 +387,13 @@ func viewModelToSnapshot(vm *ServiceViewModel) *service.SettingsSnapshot {
 
 	curType, _ := strconv.Atoi(vm.SelectedClicheType)
 	var lines []driver.ClicheLineData
+
 	for _, item := range vm.ClicheItems {
-		item.UpdateFormatString()
+		// Обновляем формат в строке перед сохранением
+		item.updateFormat()
 		lines = append(lines, driver.ClicheLineData{
-			Text:   item.Text,
-			Format: item.Format,
+			Text:   item.Line.Text,
+			Format: item.Line.Format,
 		})
 	}
 	s.Cliches[curType] = lines
@@ -679,35 +671,49 @@ func onReadAllSettings() {
 				serviceModel.OptB9_BaseTax = strconv.Itoa(taxVal)
 			}
 
-			// 3. Обновляем клише (текущий выбранный тип)
+			// 3. Обновляем клише (ОБНОВЛЕНО)
 			curType, _ := strconv.Atoi(serviceModel.SelectedClicheType)
 			lines := allCliches[curType]
+
 			for i := 0; i < 10; i++ {
+				var text, format string
 				if i < len(lines) {
-					serviceModel.ClicheItems[i].Text = lines[i].Text
-					serviceModel.ClicheItems[i].Format = lines[i].Format
+					text = lines[i].Text
+					format = lines[i].Format
 				} else {
-					serviceModel.ClicheItems[i].Text = ""
-					serviceModel.ClicheItems[i].Format = "000000"
+					text = ""
+					format = "000000"
 				}
-				serviceModel.ClicheItems[i].ParseFormatString()
+
+				// Используем пакет cliche для парсинга
+				props := cliche.ParseFormat(format)
+
+				serviceModel.ClicheItems[i].Line = cliche.Line{
+					Text:   text,
+					Format: format,
+					Props:  props,
+				}
 			}
-			clicheModel.PublishRowsReset()
 
-			// 4. Синхронизируем UI с обновленной моделью
-			serviceBinder.Reset()
-
-			// 5. СОЗДАЕМ ИДЕНТИЧНЫЕ СНАПШОТЫ
-			// Сначала формируем Snapshot из того, что только что записали в VM
+			// 4. Сначала обновляем СНАПШОТЫ, чтобы StyleCell имел доступ к данным
 			tempSnap := viewModelToSnapshot(serviceModel)
-			// Добавляем в него все вычитанные типы клише (не только текущий)
 			tempSnap.Cliches = allCliches
 
 			initialSnapshot = tempSnap
 			currentSnapshot = tempSnap
 			currentChanges = nil
 
-			// 6. Снимаем блокировку и обновляем состояние кнопки
+			// 5. Теперь безопасно обновлять таблицу и принудительно перерисовывать
+			clicheModel.PublishRowsReset()
+			// ИСПРАВЛЕНО: Принудительная перерисовка таблицы
+			if clicheTable != nil {
+				clicheTable.Invalidate()
+			}
+
+			// 6. Синхронизируем UI с обновленной моделью
+			serviceBinder.Reset()
+
+			// 7. Снимаем блокировку и обновляем состояние кнопки
 			isLoadingData = false
 			btnServiceAction.SetEnabled(true)
 			btnServiceAction.SetText("Считать настройки")
@@ -809,14 +815,21 @@ func GetServiceTab() d.TabPage {
 		OptB9_SNO:          []*NV{{Name: "Не выбрано", Code: "0"}},
 		OfdClient:          "1",
 		SelectedClicheType: "1",
-		CurrentClicheLine:  &ClicheItem{},
+		CurrentClicheLine:  &ClicheItemWrapper{},
+		TempClicheLine:     &ClicheItemWrapper{Line: cliche.Line{Format: "000000", Props: cliche.DefaultProps()}},
 	}
 
-	serviceModel.ClicheItems = make([]*ClicheItem, 10)
+	serviceModel.ClicheItems = make([]*ClicheItemWrapper, 10)
 	for i := 0; i < 10; i++ {
-		item := &ClicheItem{Index: i, Format: "000000"}
-		item.ParseFormatString()
-		serviceModel.ClicheItems[i] = item
+		// Инициализация строк с дефолтными пропсами
+		wrapper := &ClicheItemWrapper{
+			Index: i,
+			Line: cliche.Line{
+				Format: "000000",
+				Props:  cliche.DefaultProps(),
+			},
+		}
+		serviceModel.ClicheItems[i] = wrapper
 	}
 	clicheModel = &ClicheModel{Items: serviceModel.ClicheItems}
 
@@ -1012,50 +1025,101 @@ func GetServiceTab() d.TabPage {
 										MinSize:               d.Size{Width: 300, Height: 200},
 										MaxSize:               d.Size{Width: 300, Height: 200},
 										OnCurrentIndexChanged: onClicheSelectionChanged,
+										StyleCell: func(style *walk.CellStyle) {
+											// Задаем черный цвет по умолчанию
+											style.TextColor = walk.RGB(0, 0, 0)
+
+											if initialSnapshot == nil {
+												return
+											}
+											row := style.Row()
+											if row < 0 || row >= len(serviceModel.ClicheItems) {
+												return
+											}
+
+											curType, _ := strconv.Atoi(serviceModel.SelectedClicheType)
+											if initialSnapshot.Cliches == nil {
+												return
+											}
+											initialLines := initialSnapshot.Cliches[curType]
+
+											var initialFormat, initialText string
+											if row < len(initialLines) {
+												initialFormat = initialLines[row].Format
+												initialText = initialLines[row].Text
+											} else {
+												initialFormat = "000000"
+												initialText = ""
+											}
+
+											currentItem := serviceModel.ClicheItems[row]
+
+											// Если есть отличия - выделяем жирным
+											if currentItem.Line.Text != initialText || currentItem.Line.Format != initialFormat {
+												// БЕЗОПАСНОЕ ПОЛУЧЕНИЕ ШРИФТА
+												var family string
+												var size int
+
+												if style.Font != nil {
+													family = style.Font.Family()
+													size = style.Font.PointSize()
+												} else if clicheTable != nil && clicheTable.Font() != nil {
+													// Берем шрифт самой таблицы
+													family = clicheTable.Font().Family()
+													size = clicheTable.Font().PointSize()
+												} else {
+													// Дефолтные значения (если совсем всё плохо)
+													family = "Segoe UI"
+													size = 9
+												}
+
+												// Создаем жирный шрифт
+												if f, err := walk.NewFont(family, size, walk.FontBold); err == nil {
+													style.Font = f
+												}
+											}
+										},
 									},
 									d.GroupBox{
 										AssignTo: &clicheEditorGroup,
 										Title:    "Настройки строки",
 										Layout:   d.VBox{Margins: d.Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}, Spacing: 8},
 										Enabled:  false,
-										MaxSize:  d.Size{Width: 300, Height: 200},
+										MaxSize:  d.Size{Width: 300, Height: 250},
 										DataBinder: d.DataBinder{
 											AssignTo:   &clicheEditorBinder,
-											DataSource: serviceModel.CurrentClicheLine,
-											AutoSubmit: true,
+											DataSource: serviceModel.TempClicheLine,
+											// AutoSubmit не нужен, мы читаем вручную
 										},
 										Children: []d.Widget{
 											d.Label{Text: "Текст:"},
 											d.LineEdit{
-												Text:          d.Bind("Text"),
-												OnTextChanged: onClicheItemChanged,
+												AssignTo: &ceText,
+												Text:     d.Bind("Text"),
 											},
 											d.Composite{
 												Layout: d.Grid{Columns: 2, Spacing: 10},
 												Children: []d.Widget{
 													d.Label{Text: "Выравнивание:"},
 													d.ComboBox{
-														Value:                 d.Bind("Align"),
-														Model:                 listAlign,
-														BindingMember:         "Code",
-														DisplayMember:         "Name",
-														OnCurrentIndexChanged: onClicheItemChanged,
+														AssignTo:      &ceAlign,
+														Value:         d.Bind("Align"),
+														Model:         listAlign,
+														BindingMember: "Code", DisplayMember: "Name",
 													},
 													d.Label{Text: "Шрифт:"},
 													d.ComboBox{
-														Value:                 d.Bind("Font"),
-														Model:                 listFonts,
-														BindingMember:         "Code",
-														DisplayMember:         "Name",
-														OnCurrentIndexChanged: onClicheItemChanged,
+														AssignTo:      &ceFont,
+														Value:         d.Bind("Font"),
+														Model:         listFonts,
+														BindingMember: "Code", DisplayMember: "Name",
 													},
 													d.Label{Text: "Подчеркивание:"},
 													d.ComboBox{
-														Value:                 d.Bind("Underline"),
-														Model:                 listUnderline,
-														BindingMember:         "Code",
-														DisplayMember:         "Name",
-														OnCurrentIndexChanged: onClicheItemChanged,
+														AssignTo:      &ceUnder,
+														Value:         d.Bind("Underline"),
+														Model:         listUnderline,
+														BindingMember: "Code", DisplayMember: "Name",
 													},
 												},
 											},
@@ -1065,26 +1129,27 @@ func GetServiceTab() d.TabPage {
 												Children: []d.Widget{
 													d.Label{Text: "Ширина:"},
 													d.NumberEdit{
-														Value:          d.Bind("Width"),
-														MinValue:       0,
-														MaxValue:       8,
-														MaxSize:        d.Size{Width: 40},
-														OnValueChanged: onClicheItemChanged,
+														AssignTo: &ceWidth,
+														Value:    d.Bind("Width"),
+														MinValue: 0, MaxValue: 8, MaxSize: d.Size{Width: 40},
 													},
 													d.Label{Text: "Высота:"},
 													d.NumberEdit{
-														Value:          d.Bind("Height"),
-														MinValue:       0,
-														MaxValue:       8,
-														MaxSize:        d.Size{Width: 40},
-														OnValueChanged: onClicheItemChanged,
+														AssignTo: &ceHeight,
+														Value:    d.Bind("Height"),
+														MinValue: 0, MaxValue: 8, MaxSize: d.Size{Width: 40},
 													},
 												},
 											},
 											d.CheckBox{
-												Text:                "Инверсия (Белым по черному)",
-												Checked:             d.Bind("Invert"),
-												OnCheckStateChanged: func() { onClicheItemChanged() },
+												AssignTo: &ceInvert, // <--- ДОБАВЛЕНО
+												Text:     "Инверсия (Белым по черному)",
+												Checked:  d.Bind("Invert"),
+											},
+											d.VSpacer{Size: 5},
+											d.PushButton{
+												Text:      "Применить изменения строки",
+												OnClicked: onApplyClicheLine,
 											},
 										},
 									},
@@ -1165,18 +1230,26 @@ func restoreViewFromSnapshot(vm *ServiceViewModel, snap *service.SettingsSnapsho
 	taxVal := snap.Options.B9 & 0x0F
 	vm.OptB9_BaseTax = strconv.Itoa(taxVal)
 
-	// 8. Клише (восстанавливаем текущий отображаемый тип)
+	// 8. Клише
 	curType, _ := strconv.Atoi(vm.SelectedClicheType)
 	lines := snap.Cliches[curType]
+
 	for i := 0; i < 10; i++ {
+		var text, format string
 		if i < len(lines) {
-			vm.ClicheItems[i].Text = lines[i].Text
-			vm.ClicheItems[i].Format = lines[i].Format
+			text = lines[i].Text
+			format = lines[i].Format
 		} else {
-			vm.ClicheItems[i].Text = ""
-			vm.ClicheItems[i].Format = "000000"
+			text = ""
+			format = "000000"
 		}
-		vm.ClicheItems[i].ParseFormatString()
+
+		// Заполняем структуру Line внутри Wrapper, используя новый парсер
+		vm.ClicheItems[i].Line = cliche.Line{
+			Text:   text,
+			Format: format,
+			Props:  cliche.ParseFormat(format),
+		}
 	}
 
 	// Обновляем визуальное состояние
@@ -1219,17 +1292,25 @@ func onClicheTypeSwitched() {
 	lines := currentSnapshot.Cliches[newType]
 
 	for i := 0; i < 10; i++ {
+		var text, format string
 		if i < len(lines) {
-			serviceModel.ClicheItems[i].Text = lines[i].Text
-			serviceModel.ClicheItems[i].Format = lines[i].Format
+			text = lines[i].Text
+			format = lines[i].Format
 		} else {
-			serviceModel.ClicheItems[i].Text = ""
-			serviceModel.ClicheItems[i].Format = "000000"
+			text = ""
+			format = "000000"
 		}
-		serviceModel.ClicheItems[i].ParseFormatString()
+
+		// Заполняем структуру Line внутри Wrapper, используя парсер
+		serviceModel.ClicheItems[i].Line = cliche.Line{
+			Text:   text,
+			Format: format,
+			Props:  cliche.ParseFormat(format),
+		}
 	}
 
 	clicheModel.PublishRowsReset()
+	// Если была выбрана строка для редактирования, перезагружаем редактор
 	if idx := clicheTable.CurrentIndex(); idx >= 0 {
 		reloadEditor(idx)
 	}
@@ -1337,6 +1418,104 @@ func onMGMReset() {
 	go func() { drv.ResetMGM() }()
 }
 
+// reloadEditor загружает данные из выбранной строки списка во временный объект редактора.
+func reloadEditor(idx int) {
+	srcItem := serviceModel.ClicheItems[idx]
+
+	// Копируем данные в TempClicheLine
+	// Важно скопировать значения, а не ссылку, чтобы редактирование не меняло список сразу
+	serviceModel.TempClicheLine.Index = srcItem.Index
+	serviceModel.TempClicheLine.Line = srcItem.Line // cliche.Line - это struct (value type), копируется по значению
+
+	if clicheEditorBinder != nil {
+		clicheEditorBinder.SetDataSource(serviceModel.TempClicheLine)
+		clicheEditorBinder.Reset()
+	}
+
+	// Обновляем DataBinder редактора
+	clicheEditorBinder.Reset()
+
+	clicheEditorGroup.SetEnabled(true)
+	clicheEditorGroup.SetTitle(fmt.Sprintf("Настройки строки №%d", idx+1))
+}
+
+// onApplyClicheLine вызывается при нажатии кнопки "Применить" в редакторе клише.
+func onApplyClicheLine() {
+	idx := clicheTable.CurrentIndex()
+	if idx < 0 {
+		return
+	}
+
+	// 1. Ручное чтение значений из виджетов
+	newText := ceText.Text()
+
+	// Хелпер для чтения значения из ComboBox через Model и CurrentIndex
+	getComboVal := func(cb *walk.ComboBox) int {
+		idx := cb.CurrentIndex()
+		if idx < 0 {
+			return 0
+		}
+
+		// Получаем модель виджета и приводим к типу []*NV, который мы использовали при инициализации
+		if items, ok := cb.Model().([]*NV); ok {
+			if idx < len(items) {
+				if i, err := strconv.Atoi(items[idx].Code); err == nil {
+					return i
+				}
+			}
+		}
+		return 0
+	}
+
+	newAlign := getComboVal(ceAlign)
+	newFont := getComboVal(ceFont)
+	newUnder := getComboVal(ceUnder)
+
+	newWidth := int(ceWidth.Value())
+	newHeight := int(ceHeight.Value())
+	newInvert := ceInvert.Checked()
+
+	// 2. Обновляем структуру TempClicheLine вручную
+	serviceModel.TempClicheLine.Line.Text = newText
+	serviceModel.TempClicheLine.Line.Props.Align = newAlign
+	serviceModel.TempClicheLine.Line.Props.Font = newFont
+	serviceModel.TempClicheLine.Line.Props.Underline = newUnder
+	serviceModel.TempClicheLine.Line.Props.Width = newWidth
+	serviceModel.TempClicheLine.Line.Props.Height = newHeight
+	serviceModel.TempClicheLine.Line.Props.Invert = newInvert
+
+	// Пересчитываем формат (строку "xxxxxx")
+	serviceModel.TempClicheLine.updateFormat()
+
+	// 3. Сравниваем с текущим значением в списке
+	originalItem := serviceModel.ClicheItems[idx]
+
+	hasChanges := false
+	if serviceModel.TempClicheLine.Line.Text != originalItem.Line.Text {
+		hasChanges = true
+	}
+	if serviceModel.TempClicheLine.Line.Format != originalItem.Line.Format {
+		hasChanges = true
+	}
+
+	if !hasChanges {
+		logMsg("Нет изменений в строке %d", idx+1)
+		return
+	}
+
+	// 4. Применяем изменения в основной список
+	originalItem.Line = serviceModel.TempClicheLine.Line
+
+	// 5. Обновляем таблицу и запускаем пересчет изменений
+	clicheModel.PublishRowChanged(idx)
+	if clicheTable != nil {
+		clicheTable.Invalidate()
+	}
+	recalcChanges()
+
+	logMsg("Строка %d обновлена в памяти: %s (Format: %s)", idx+1, newText, serviceModel.TempClicheLine.Line.Format)
+}
+
 func onClicheSelectionChanged() {
 	idx := clicheTable.CurrentIndex()
 	if idx < 0 {
@@ -1344,23 +1523,4 @@ func onClicheSelectionChanged() {
 		return
 	}
 	reloadEditor(idx)
-}
-
-func reloadEditor(idx int) {
-	item := serviceModel.ClicheItems[idx]
-	clicheEditorBinder.SetDataSource(item)
-	clicheEditorBinder.Reset()
-
-	clicheEditorGroup.SetEnabled(true)
-	clicheEditorGroup.SetTitle(fmt.Sprintf("Настройки строки №%d", idx+1))
-}
-
-func onClicheItemChanged() {
-	idx := clicheTable.CurrentIndex()
-	if idx >= 0 {
-		item := serviceModel.ClicheItems[idx]
-		item.UpdateFormatString()
-		clicheModel.PublishRowChanged(idx)
-		recalcChanges()
-	}
 }

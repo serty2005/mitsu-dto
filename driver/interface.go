@@ -39,7 +39,7 @@ type Driver interface {
 	SetComSettings(speed int32) error
 	SetPrinterSettings(settings PrinterSettings) error
 	SetMoneyDrawerSettings(settings DrawerSettings) error
-	SetHeaderLine(headerNum int, lineNum int, text string, format string) error
+	SetHeader(headerNum int, lines []ClicheLineData) error
 	SetLanSettings(settings LanSettings) error
 	SetOfdSettings(settings OfdSettings) error
 	SetOismSettings(settings ServerSettings) error

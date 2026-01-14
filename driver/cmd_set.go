@@ -2,6 +2,7 @@ package driver
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -70,7 +71,7 @@ func (d *mitsuDriver) SetMoneyDrawerSettings(s DrawerSettings) error {
 	return err
 }
 
-// SetHeaderLine (4.8)
+// SetHeader (4.8)
 // Установка клише и подвала.
 // headerNum:
 // 1 - клише №1, печатается в заголовке в самом верху документа
@@ -88,7 +89,37 @@ func (d *mitsuDriver) SetMoneyDrawerSettings(s DrawerSettings) error {
 // 6 цифра: выравнивание (0-лево, 1-центр, 2-право)
 // Строки каждого клише надо программировать по одной, подряд без пропуска. Например, если задать строки L0 и L2, то установися только строка L0.
 // Установка каждой строки стирает все последующие внутри клише. Например, если сначала задать строки с L0 по L3, а затем повторно задать строки L0 и L1, то строки L2 и L3 сотрутся
-// Исправлено: используется атрибут FORM вместо F, так как реальное устройство использует FORM.
+func (d *mitsuDriver) SetHeader(headerNum int, lines []ClicheLineData) error {
+	var sb strings.Builder
+
+	// Открываем тег команды
+	sb.WriteString(fmt.Sprintf("<SET HEADER='%d'>", headerNum))
+
+	// Добавляем строки L0..Ln
+	for i, line := range lines {
+		// Ограничение: максимум 10 строк (0-9)
+		if i > 9 {
+			break
+		}
+
+		format := line.Format
+		if format == "" {
+			format = "000000"
+		}
+
+		// Экранируем текст
+		safeText := escapeXMLText(line.Text)
+
+		// Используем атрибут FORM
+		sb.WriteString(fmt.Sprintf("<L%d FORM='%s'>%s</L%d>", i, format, safeText, i))
+	}
+
+	sb.WriteString("</SET>")
+
+	_, err := d.sendCommand(sb.String())
+	return err
+}
+
 func (d *mitsuDriver) SetHeaderLine(headerNum int, lineNum int, text string, format string) error {
 	if format == "" {
 		format = "000000"
