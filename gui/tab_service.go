@@ -548,6 +548,14 @@ func onReadAllSettings() {
 		return
 	}
 
+	// 1. ЗАПОМИНАЕМ ТЕКУЩИЙ ВЫБРАННЫЙ ТИП КЛИШЕ
+	// Чтобы после чтения настроек не сбрасывать пользователя на "Заголовок".
+	// Если пусто (первый запуск), ставим "1".
+	currentClicheType := "1"
+	if serviceModel.SelectedClicheType != "" {
+		currentClicheType = serviceModel.SelectedClicheType
+	}
+
 	mw.Synchronize(func() {
 		// Блокируем триггеры изменений на время загрузки
 		isLoadingData = true
@@ -664,11 +672,11 @@ func onReadAllSettings() {
 			}
 
 			// 3. Обновляем клише
-			// Сбрасываем выбор на первый тип
-			serviceModel.SelectedClicheType = "1"
-			serviceModel.LastSelectedType = "1" // Инициализируем трекинг
+			// ИСПОЛЬЗУЕМ СОХРАНЕННЫЙ ТИП
+			serviceModel.SelectedClicheType = currentClicheType
+			serviceModel.LastSelectedType = currentClicheType
 
-			curType := 1
+			curType, _ := strconv.Atoi(currentClicheType)
 			lines := allCliches[curType]
 
 			for i := 0; i < 10; i++ {
