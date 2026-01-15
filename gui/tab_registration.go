@@ -101,11 +101,11 @@ func GetRegistrationTab() d.TabPage {
 
 	return d.TabPage{
 		Title:  "Регистрация",
-		Layout: d.VBox{},
+		Layout: d.VBox{Margins: d.Margins{Left: 2, Top: 2, Right: 2, Bottom: 2}, Spacing: 3},
 		Children: []d.Widget{
 			// Верхняя панель
 			d.Composite{
-				Layout: d.Grid{Columns: 3, Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 5},
+				Layout: d.Grid{Columns: 3, Margins: d.Margins{Left: 2, Top: 2, Right: 2, Bottom: 2}, Spacing: 3},
 				Children: []d.Widget{
 					d.Label{Text: "Регистрационный номер ККТ (РНМ):"},
 					d.LineEdit{Text: d.Bind("RNM"), MinSize: d.Size{Width: 150}},
@@ -115,12 +115,12 @@ func GetRegistrationTab() d.TabPage {
 
 			// Основной контент
 			d.Composite{
-				Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 2}, Spacing: 3},
+				Layout: d.VBox{Margins: d.Margins{Left: 2, Top: 2, Right: 2, Bottom: 2}, Spacing: 3},
 				Children: []d.Widget{
 					d.Composite{
 						// Используем HBox для расположения блоков по горизонтали
 						// Alignment: AlignTop прижмет маленький блок к верху
-						Layout: d.HBox{Margins: d.Margins{Left: 8, Top: 2, Right: 8, Bottom: 2}, Spacing: 3, Alignment: d.Alignment2D(d.AlignDefault)},
+						Layout: d.HBox{Margins: d.Margins{Left: 2, Top: 2, Right: 2, Bottom: 2}, Spacing: 3, Alignment: d.Alignment2D(d.AlignDefault)},
 						Children: []d.Widget{
 							d.GroupBox{
 								Title: "Реквизиты организации",

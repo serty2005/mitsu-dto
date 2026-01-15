@@ -63,10 +63,10 @@ func RunApp() error {
 	err := d.MainWindow{
 		AssignTo: &mw,
 		Title:    "Mitsu Driver Utility",
-		// ИЗМЕНЕНО: Фиксируем размер окна (600x600)
-		Size:    d.Size{Width: 600, Height: 600},
-		MinSize: d.Size{Width: 600, Height: 600},
-		MaxSize: d.Size{Width: 600, Height: 600},
+		// Фиксируем размер окна (600x600)
+		Size:    d.Size{Width: 400, Height: 600},
+		MinSize: d.Size{Width: 400, Height: 600},
+		MaxSize: d.Size{Width: 400, Height: 600},
 		Layout:  d.VBox{MarginsZero: true, Spacing: 5},
 		Children: []d.Widget{
 			// --- Верхняя панель (Подключение + Инфо) ---
@@ -92,7 +92,7 @@ func RunApp() error {
 								AssignTo:  &actionBtn,
 								Text:      "Подключить",
 								OnClicked: onActionBtnClicked,
-								MinSize:   d.Size{Width: 90},
+								MinSize:   d.Size{Width: 80},
 							},
 							d.PushButton{
 								AssignTo:    &clearProfilesBtn,
@@ -105,7 +105,7 @@ func RunApp() error {
 					},
 
 					// РАЗДЕЛИТЕЛЬ
-					d.VSeparator{},
+					// d.VSeparator{},
 
 					// ПРАВАЯ ЧАСТЬ: Инфо о ККТ (Model, SN, Reboot status)
 					d.Composite{
@@ -117,7 +117,6 @@ func RunApp() error {
 							d.Label{AssignTo: &serialLabel, Text: "SN: ..."},
 							d.Label{AssignTo: &unsentDocsLabel, Text: "ОФД: 0"},
 							d.Label{Text: "|"},
-							d.Label{Text: "Статус:"},
 							d.Label{
 								AssignTo:    &rebootIndicator,
 								Text:        "⦿", // Кружок

@@ -163,8 +163,9 @@ func (m *ClicheModel) Value(row, col int) interface{} {
 
 type ServiceViewModel struct {
 	// --- Время ---
-	KktTimeStr string
-	PcTimeStr  string
+	KktTimeStr    string
+	TargetTimeStr string // Было PcTimeStr. Теперь это желаемое время установки.
+	AutoSyncPC    bool   // Чекбокс "Авто (Время ПК)"
 
 	// --- Связь и ОФД ---
 	OfdString string // Адрес:Порт
@@ -255,12 +256,16 @@ var (
 	b9ComboBox *walk.ComboBox
 
 	// Элементы для прямого доступа (Время)
-	kktTimeLabel *walk.Label
-	pcTimeLabel  *walk.Label
+	kktTimeLabel   *walk.Label
+	targetTimeEdit *walk.LineEdit
+	autoSyncCheck  *walk.CheckBox
 
 	// Таймеры
 	pcTicker  *time.Ticker
 	kktTicker *time.Ticker
+
+	// Сервис времени
+	timeService *service.TimeLogic
 
 	// Флаг загрузки (блокировка событий)
 	isLoadingData bool
@@ -541,9 +546,10 @@ func onReadAllSettings() {
 	if drv == nil {
 		mw.Synchronize(func() {
 			serviceModel.KktTimeStr = "Нет подключения"
-			serviceModel.PcTimeStr = time.Now().Format("02.01.2006 15:04:05")
+			// При потере связи ставим время ПК
+			serviceModel.TargetTimeStr = timeService.FormatTime(time.Now())
 			serviceBinder.Reset()
-			btnServiceAction.SetText("Считать настройки")
+			btnServiceAction.SetText("Считать")
 		})
 		return
 	}
@@ -588,6 +594,8 @@ func onReadAllSettings() {
 			if !t.IsZero() {
 				serviceModel.KktTimeStr = t.Format("02.01.2006 15:04:05")
 			}
+			// Целевое время при чтении обновляем текущим временем ПК (так как стоит авто)
+			serviceModel.TargetTimeStr = timeService.FormatTime(time.Now())
 
 			// 2. Обновляем основные поля в ViewModel
 			if ofd != nil {
@@ -742,7 +750,7 @@ func onReadAllSettings() {
 			// 7. Снимаем блокировку и обновляем состояние кнопки
 			isLoadingData = false
 			btnServiceAction.SetEnabled(true)
-			btnServiceAction.SetText("Считать настройки")
+			btnServiceAction.SetText("Считать")
 
 			// Принудительно сбрасываем подсветку
 			highlightLabels(nil)
@@ -764,10 +772,26 @@ func startClocks() {
 				}
 				mw.Synchronize(func() {
 					now := time.Now()
-					serviceModel.PcTimeStr = now.Format("02.01.2006 15:04:05")
-					checkTimeDifference(now)
-					if pcTimeLabel != nil {
-						pcTimeLabel.SetText(serviceModel.PcTimeStr)
+
+					// Логика обновления поля ввода
+					if autoSyncCheck != nil && autoSyncCheck.Checked() {
+						serviceModel.TargetTimeStr = timeService.FormatTime(now)
+						if targetTimeEdit != nil {
+							targetTimeEdit.SetText(serviceModel.TargetTimeStr)
+						}
+					}
+
+					// Логика проверки разницы времени
+					// Берем время из поля ввода (оно может быть ручным или авто)
+					currentTimeStr := ""
+					if targetTimeEdit != nil {
+						currentTimeStr = targetTimeEdit.Text()
+					}
+
+					// Парсим время из поля ввода для сравнения
+					targetTime, err := timeService.ParseTime(currentTimeStr)
+					if err == nil {
+						checkTimeDifference(targetTime)
 					}
 				})
 			}
@@ -782,10 +806,10 @@ func startClocks() {
 				}
 				mw.Synchronize(func() {
 					if len(serviceModel.KktTimeStr) > 10 && serviceModel.KktTimeStr != "Нет подключения" && serviceModel.KktTimeStr != "Ошибка" {
-						t, err := time.Parse("02.01.2006 15:04:05", serviceModel.KktTimeStr)
+						t, err := timeService.ParseTime(serviceModel.KktTimeStr)
 						if err == nil {
 							t = t.Add(time.Second)
-							serviceModel.KktTimeStr = t.Format("02.01.2006 15:04:05")
+							serviceModel.KktTimeStr = timeService.FormatTime(t)
 							if kktTimeLabel != nil {
 								kktTimeLabel.SetText(serviceModel.KktTimeStr)
 							}
@@ -797,22 +821,22 @@ func startClocks() {
 	}
 }
 
-func checkTimeDifference(pcTime time.Time) {
+func checkTimeDifference(targetTime time.Time) {
 	if kktTimeLabel == nil {
 		return
 	}
-	kktTime, err := time.Parse("02.01.2006 15:04:05", serviceModel.KktTimeStr)
-	if err != nil {
-		kktTimeLabel.SetTextColor(walk.RGB(0, 0, 0))
-		return
-	}
-	diff := pcTime.Sub(kktTime)
-	if diff < 0 {
-		diff = -diff
-	}
-	if diff > 5*time.Minute {
+
+	_, status := timeService.CompareTimes(serviceModel.KktTimeStr, targetTime)
+
+	switch status {
+	case service.TimeStatusOk:
+		// Зеленый (OK)
+		kktTimeLabel.SetTextColor(walk.RGB(0, 128, 0))
+	case service.TimeStatusCritical:
+		// Красный (Расхождение > 5 мин)
 		kktTimeLabel.SetTextColor(walk.RGB(255, 0, 0))
-	} else {
+	default:
+		// Черный (Нет данных или ошибка)
 		kktTimeLabel.SetTextColor(walk.RGB(0, 0, 0))
 	}
 }
@@ -841,9 +865,12 @@ func GetServiceTab() d.TabPage {
 		OptB9_SNO:          []*NV{{Name: "Не выбрано", Code: "0"}},
 		OfdClient:          "1",
 		SelectedClicheType: "1",
-		LastSelectedType:   "1", // ДОБАВЛЕНО
+		LastSelectedType:   "1",
 		CurrentClicheLine:  &ClicheItemWrapper{},
 		TempClicheLine:     &ClicheItemWrapper{Line: cliche.Line{Format: "000000", Props: cliche.DefaultProps()}},
+		KktTimeStr:         "Нет подключения",
+		TargetTimeStr:      timeService.FormatTime(time.Now()),
+		AutoSyncPC:         true, // По умолчанию включена синхронизация с ПК
 	}
 
 	serviceModel.ClicheItems = make([]*ClicheItemWrapper, 10)
@@ -873,20 +900,45 @@ func GetServiceTab() d.TabPage {
 				Layout: d.HBox{MarginsZero: true, Spacing: 6},
 				Children: []d.Widget{
 					d.GroupBox{
-						Title: "Синхронизация", StretchFactor: 1,
+						Title: "Синхронизация времени", StretchFactor: 1,
 						Layout: d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 4},
 						Children: []d.Widget{
 							d.Composite{
 								Layout: d.Grid{Columns: 2, Spacing: 4},
 								Children: []d.Widget{
-									d.Label{Text: "ККТ:", Font: d.Font{PointSize: 8}},
-									d.Label{AssignTo: &kktTimeLabel, Text: d.Bind("KktTimeStr"), Font: d.Font{PointSize: 9, Bold: true}},
-									d.Label{Text: "ПК:", Font: d.Font{PointSize: 8}},
-									d.Label{AssignTo: &pcTimeLabel, Text: d.Bind("PcTimeStr"), Font: d.Font{PointSize: 9, Bold: true}},
+									d.Label{Text: "Время ККТ:", Font: d.Font{PointSize: 8}},
+									d.Label{
+										AssignTo: &kktTimeLabel,
+										Text:     d.Bind("KktTimeStr"),
+										Font:     d.Font{PointSize: 9, Bold: true},
+									},
+
+									d.Label{Text: "Установить:", Font: d.Font{PointSize: 8}},
+									d.LineEdit{
+										AssignTo: &targetTimeEdit,
+										Text:     d.Bind("TargetTimeStr"),
+										// Запрещаем редактирование если стоит галочка Авто (реализуется через OnCheckStateChanged)
+										ReadOnly: false,
+									},
 								},
 							},
-							d.VSpacer{Size: 2},
-							d.PushButton{Text: "Синхронизировать", OnClicked: onSyncTime},
+							d.Composite{
+								Layout: d.HBox{MarginsZero: true},
+								Children: []d.Widget{
+									d.CheckBox{
+										AssignTo: &autoSyncCheck,
+										Text:     "Авто (ПК)",
+										Checked:  d.Bind("AutoSyncPC"),
+										OnCheckStateChanged: func() {
+											if targetTimeEdit != nil {
+												targetTimeEdit.SetReadOnly(autoSyncCheck.Checked())
+											}
+										},
+									},
+									d.HSpacer{},
+									d.PushButton{Text: "Установить", OnClicked: onSyncTime},
+								},
+							},
 						},
 					},
 					d.GroupBox{
@@ -930,16 +982,19 @@ func GetServiceTab() d.TabPage {
 										Children: []d.Widget{
 											d.GroupBox{
 												Title:  "ОФД и ОИСМ",
-												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Layout: d.Grid{Columns: 4, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
 													d.Label{AssignTo: &sLabels.OfdAddr, Text: "ОФД:"}, d.LineEdit{Text: d.Bind("OfdString"), MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OfdClient, Text: "Клиент:"}, d.ComboBox{Value: d.Bind("OfdClient"), BindingMember: "Code", DisplayMember: "Name", Model: listClients, OnCurrentIndexChanged: checkOfdClientChange, MaxSize: d.Size{Width: 100}},
 													d.Label{AssignTo: &sLabels.OismAddr, Text: "ОИСМ:"}, d.LineEdit{Text: d.Bind("OismString"), MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.TimerFN, Text: "Т. ФН:"}, d.NumberEdit{Value: d.Bind("TimerFN"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.Timezone, Text: "Пояс:"}, d.ComboBox{Value: d.Bind("OptTimezone"), BindingMember: "Code", DisplayMember: "Name", Model: listTimezones, MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.TimerOFD, Text: "Т. ОФД:"}, d.NumberEdit{Value: d.Bind("TimerOFD"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
 												},
 											},
 											d.GroupBox{
 												Title:  "Принтер и Бумага",
-												Layout: d.Grid{Columns: 4, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Layout: d.Grid{Columns: 6, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
 													d.Label{AssignTo: &sLabels.PrinterModel, Text: "Модель:"}, d.ComboBox{Value: d.Bind("PrintModel"), BindingMember: "Code", DisplayMember: "Name", Model: listModels, MaxSize: d.Size{Width: 70}, OnCurrentIndexChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.PrinterCut, Text: "Отрез:"}, d.CheckBox{Checked: d.Bind("OptCut"), OnCheckStateChanged: recalcChanges},
@@ -948,8 +1003,19 @@ func GetServiceTab() d.TabPage {
 													d.Label{AssignTo: &sLabels.PrinterPaper, Text: "Ширина:"}, d.ComboBox{Value: d.Bind("PrintPaper"), BindingMember: "Code", DisplayMember: "Name", Model: listPapers, MaxSize: d.Size{Width: 70}, OnCurrentIndexChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.PrinterTest, Text: "Тест:"}, d.CheckBox{Checked: d.Bind("OptAutoTest"), OnCheckStateChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.PrinterFont, Text: "Шрифт:"}, d.ComboBox{Value: d.Bind("PrintFont"), BindingMember: "Code", DisplayMember: "Name", Model: listFonts, MaxSize: d.Size{Width: 70}, ToolTipText: "A-стандратный, B-компактный", OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.DrawerTrig, Text: "Триггер:"}, d.ComboBox{Value: d.Bind("OptDrawerTrig"), BindingMember: "Code", DisplayMember: "Name", Model: listDrawerTrig, MaxSize: d.Size{Width: 80}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.DrawerPin, Text: "PIN:"}, d.NumberEdit{Value: d.Bind("DrawerPin"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.DrawerRise, Text: "Rise:"}, d.NumberEdit{Value: d.Bind("DrawerRise"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.DrawerFall, Text: "Fall:"}, d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
 												},
 											},
+										},
+									},
+
+									// КОЛОНКА 2
+									d.Composite{
+										Layout: d.HBox{MarginsZero: true, Spacing: 4},
+										Children: []d.Widget{
 											d.GroupBox{
 												Title:  "Сеть (LAN)",
 												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
@@ -958,22 +1024,6 @@ func GetServiceTab() d.TabPage {
 													d.Label{AssignTo: &sLabels.LanMask, Text: "Mask:"}, d.LineEdit{Text: d.Bind("LanMask"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.LanGw, Text: "GW:"}, d.LineEdit{Text: d.Bind("LanGw"), MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 100}, OnTextChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.LanPort, Text: "Port:"}, d.NumberEdit{Value: d.Bind("LanPort"), MaxSize: d.Size{Width: 60}, OnValueChanged: recalcChanges},
-												},
-											},
-										},
-									},
-
-									// КОЛОНКА 2
-									d.Composite{
-										Layout: d.VBox{MarginsZero: true, Spacing: 4},
-										Children: []d.Widget{
-											d.GroupBox{
-												Title:  "Настройки клиента",
-												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
-												Children: []d.Widget{
-													d.Label{AssignTo: &sLabels.OfdClient, Text: "Режим:"}, d.ComboBox{Value: d.Bind("OfdClient"), BindingMember: "Code", DisplayMember: "Name", Model: listClients, OnCurrentIndexChanged: checkOfdClientChange, MaxSize: d.Size{Width: 100}},
-													d.Label{AssignTo: &sLabels.TimerFN, Text: "Т. ФН:"}, d.NumberEdit{Value: d.Bind("TimerFN"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.TimerOFD, Text: "Т. ОФД:"}, d.NumberEdit{Value: d.Bind("TimerOFD"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
 												},
 											},
 											d.GroupBox{
@@ -988,25 +1038,26 @@ func GetServiceTab() d.TabPage {
 											},
 											d.GroupBox{
 												Title:  "Вид чека и Опции",
-												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Layout: d.Grid{Columns: 4, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
-													d.Label{AssignTo: &sLabels.OptQRPos, Text: "QR:"}, d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos, MaxSize: d.Size{Width: 80}, OnCurrentIndexChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.OptTextQR, Text: "Текст QR:"}, d.CheckBox{Checked: d.Bind("OptTextQR"), OnCheckStateChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.OptCount, Text: "Покупок:"}, d.CheckBox{Checked: d.Bind("OptCountInCheck"), OnCheckStateChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.OptRounding, Text: "Округл.:"}, d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding, MaxSize: d.Size{Width: 60}, OnCurrentIndexChanged: recalcChanges},
-
-													// ИЗМЕНЕНО: Новые контролы для b9
+													d.Label{AssignTo: &sLabels.OptQRPos, Text: "QR:"},
+													d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos, MaxSize: d.Size{Width: 40}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OptTextQR, Text: "Текст QR:"},
+													d.CheckBox{Checked: d.Bind("OptTextQR"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OptCount, Text: "Покупок:"},
+													d.CheckBox{Checked: d.Bind("OptCountInCheck"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OptRounding, Text: "Округл.:"},
+													d.ComboBox{Value: d.Bind("OptRounding"), BindingMember: "Code", DisplayMember: "Name", Model: listRounding, MaxSize: d.Size{Width: 40}, OnCurrentIndexChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.OptB9_FullX, Text: "X-Отчет:"},
 													d.CheckBox{Text: "Полный", Checked: d.Bind("OptB9_FullX"), ToolTipText: "Печатать полный X-отчет (b9 & 16)", OnCheckStateChanged: recalcChanges},
-
 													d.Label{AssignTo: &sLabels.OptB9_BaseTax, Text: "Баз. СНО:"},
 													d.ComboBox{
-														AssignTo:              &b9ComboBox, // Прямая ссылка для ручного обновления модели
+														AssignTo:              &b9ComboBox,
 														Value:                 d.Bind("OptB9_BaseTax"),
 														BindingMember:         "Code",
 														DisplayMember:         "Name",
-														Model:                 serviceModel.OptB9_SNO, // Статическая инициализация
-														MinSize:               d.Size{Width: 100},
+														Model:                 serviceModel.OptB9_SNO,
+														MinSize:               d.Size{Width: 40},
 														ToolTipText:           "Система налогообложения по умолчанию",
 														OnCurrentIndexChanged: recalcChanges,
 													},
@@ -1434,16 +1485,37 @@ func onSyncTime() {
 	if drv == nil {
 		return
 	}
-	now := time.Now()
+
+	// 1. Получаем строку времени из GUI (уже обновленную биндингом или вручную)
+	// Для надежности берем прямо из виджета
+	var timeStr string
+	if targetTimeEdit != nil {
+		timeStr = targetTimeEdit.Text()
+	} else {
+		timeStr = serviceModel.TargetTimeStr
+	}
+
+	// 2. Парсим через сервис
+	targetTime, err := timeService.ParseTime(timeStr)
+	if err != nil {
+		walk.MsgBox(mw, "Ошибка", "Некорректный формат времени.\nОжидается: ДД.ММ.ГГГГ ЧЧ:ММ:СС", walk.MsgBoxIconError)
+		return
+	}
+
 	go func() {
-		err := drv.SetDateTime(now)
+		// 3. Отправляем команду драйверу
+		err := drv.SetDateTime(targetTime)
 		mw.Synchronize(func() {
 			if err != nil {
 				walk.MsgBox(mw, "Ошибка", "Ошибка синхронизации: "+err.Error(), walk.MsgBoxIconError)
 			} else {
-				serviceModel.KktTimeStr = now.Format("02.01.2006 15:04:05")
-				serviceBinder.Reset()
-				walk.MsgBox(mw, "Успех", "Время синхронизировано.", walk.MsgBoxIconInformation)
+				// Обновляем время ККТ в UI сразу, чтобы пользователь видел результат
+				serviceModel.KktTimeStr = timeService.FormatTime(targetTime)
+				// Принудительно обновляем лейбл
+				if kktTimeLabel != nil {
+					kktTimeLabel.SetText(serviceModel.KktTimeStr)
+				}
+				walk.MsgBox(mw, "Успех", "Время установлено успешно.", walk.MsgBoxIconInformation)
 			}
 		})
 	}()
