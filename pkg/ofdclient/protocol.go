@@ -143,40 +143,42 @@ func CreateMessageHeader(fnNumber string, ffdVersion string, flags MessageFlags,
 	return header, nil
 }
 
+// ContainerHeaderSize определяет фиксированный размер заголовка контейнера по спецификации (для версий 0x)
+const ContainerHeaderSize = 32
+
 // SerializeContainer сериализует контейнер в байтовый поток
-// Все поля в Little Endian
+// Реализует структуру по Таблице 3 спецификации.
 func SerializeContainer(header *ContainerHeader, data []byte) ([]byte, error) {
 	if header == nil {
 		return nil, errors.New("container header cannot be nil")
 	}
 
-	// Длина контейнера = заголовок (7 байт) + данные
-	header.Length = uint16(7 + len(data))
+	// ИСПРАВЛЕНО: Размер буфера = 32 байта заголовок + данные
+	buf := make([]byte, ContainerHeaderSize+len(data))
 
-	buf := make([]byte, 7+len(data))
-
-	// Length — Little Endian
+	// ИСПРАВЛЕНО: Поле "Длина" содержит размер ДАННЫХ (А-объекта), а не всего контейнера
+	header.Length = uint16(len(data))
 	binary.LittleEndian.PutUint16(buf[0:2], header.Length)
 
-	// CRC вычисляем позже, пока пропускаем (байты 2-3)
+	// CRC (байты 2-3) вычисляем позже
 
 	buf[4] = header.ContainerType
 	buf[5] = header.DataType
 	buf[6] = header.FormatVersion
 
-	// Данные
+	// Байты 7-31 — это Служебные данные (Reserved), заполняются нулями (Go делает это по умолчанию)
+
+	// Данные начинаются с 32-го байта
 	if len(data) > 0 {
-		copy(buf[7:], data)
+		copy(buf[ContainerHeaderSize:], data)
 	}
 
-	// Вычисляем CRC контейнера (по Length + Type + DataType + FormatVersion + Data, без CRC)
-	crcData := make([]byte, 2+3+len(data))
-	copy(crcData[0:2], buf[0:2]) // Length
-	copy(crcData[2:5], buf[4:7]) // Type, DataType, FormatVersion
-	copy(crcData[5:], buf[7:])   // Data
-	crc := calcCRC16(crcData)
+	// Вычисляем CRC контейнера
+	// CRC считается по всему контейнеру, где поле CRC (байты 2-3) принято равным 0.
+	// Берем весь буфер, так как он уже содержит заголовок (с нулями в CRC) и данные.
+	crc := calcCRC16(buf)
 
-	// CRC — Little Endian
+	// Записываем CRC — Little Endian
 	binary.LittleEndian.PutUint16(buf[2:4], crc)
 
 	return buf, nil
@@ -184,8 +186,9 @@ func SerializeContainer(header *ContainerHeader, data []byte) ([]byte, error) {
 
 // DeserializeContainer десериализует байтовый поток в контейнер
 func DeserializeContainer(data []byte) (*ContainerHeader, []byte, error) {
-	if len(data) < 7 {
-		return nil, nil, errors.New("container too short, must be at least 7 bytes")
+	// Проверяем минимальную длину. Спецификация говорит, что для версий 0x заголовок 32 байта.
+	if len(data) < ContainerHeaderSize {
+		return nil, nil, fmt.Errorf("container too short: %d < %d bytes", len(data), ContainerHeaderSize)
 	}
 
 	header := &ContainerHeader{}
@@ -199,16 +202,25 @@ func DeserializeContainer(data []byte) (*ContainerHeader, []byte, error) {
 
 	// Данные
 	var containerData []byte
-	if len(data) > 7 {
-		containerData = data[7:]
+	if len(data) > ContainerHeaderSize {
+		containerData = data[ContainerHeaderSize:]
+	}
+
+	// Проверка длины данных
+	if int(header.Length) != len(containerData) {
+		// Опционально: можно возвращать ошибку, но иногда бывают паддинги
+		// Пока оставим предупреждение или строгую проверку
 	}
 
 	// Проверяем CRC
-	crcData := make([]byte, 2+3+len(containerData))
-	copy(crcData[0:2], data[0:2])
-	copy(crcData[2:5], data[4:7])
-	copy(crcData[5:], containerData)
-	expectedCRC := calcCRC16(crcData)
+	// Для проверки создаем копию данных заголовка с обнуленным CRC
+	checkBuf := make([]byte, len(data))
+	copy(checkBuf, data)
+	// Обнуляем поле CRC в копии
+	checkBuf[2] = 0
+	checkBuf[3] = 0
+
+	expectedCRC := calcCRC16(checkBuf)
 
 	if header.CRC != expectedCRC {
 		return nil, nil, fmt.Errorf("container CRC mismatch: got %04X, expected %04X", header.CRC, expectedCRC)

@@ -34,6 +34,14 @@ var (
 	PProtoFFD12Bytes  = [2]byte{0x01, 0x20}
 )
 
+// Config — конфигурация клиента
+type Config struct {
+	Timeout       time.Duration // Таймаут ожидания ответа (по умолчанию 300с)
+	RetryCount    int           // Количество попыток переподключения
+	RetryInterval time.Duration // Интервал между попытками
+	Logger        func(string)  // Опциональный логгер
+}
+
 // Флаги сообщения (Little Endian при сериализации)
 type MessageFlags uint16
 
@@ -112,12 +120,4 @@ type SendRequest struct {
 type SendResponse struct {
 	Receipt    []byte // Квитанция для записи в ФН
 	RawMessage []byte // Полное сырое сообщение (для отладки)
-}
-
-// Config — конфигурация клиента
-type Config struct {
-	Timeout       time.Duration // Таймаут ожидания ответа (по умолчанию 300с)
-	RetryCount    int           // Количество попыток переподключения
-	RetryInterval time.Duration // Интервал между попытками
-	Logger        func(string)  // Опциональный логгер
 }

@@ -16,6 +16,9 @@ type Client interface {
 
 	// Close освобождает ресурсы клиента
 	Close() error
+
+	// SendRaw отправляет готовое сообщение (уже сформированное ККТ) и возвращает квитанцию
+	SendRaw(ctx context.Context, address string, rawMessage []byte) (*SendResponse, error)
 }
 
 // New создает новый OFD-клиент с заданной конфигурацией
@@ -58,11 +61,15 @@ func (c *ofdClient) Send(ctx context.Context, req SendRequest) (*SendResponse, e
 		return nil, ErrEmptyContainer
 	}
 
+	// Добавлен флаг FlagExpectResponse (0x10),
+	// чтобы сервер ОФД знал, что мы ждем квитанцию.
+	flags := FlagCRCFull | FlagHasContainer | FlagExpectResponse
+
 	// Создаем заголовок сообщения с версией ФФД из запроса
 	header, err := CreateMessageHeader(
 		req.FnNumber,
-		req.FFDVersion, // Используем версию из запроса!
-		FlagCRCFull|FlagHasContainer,
+		req.FFDVersion,
+		flags,
 		uint16(len(req.Container)),
 	)
 	if err != nil {
@@ -99,6 +106,40 @@ func (c *ofdClient) Send(ctx context.Context, req SendRequest) (*SendResponse, e
 	}
 
 	// Возвращаем квитанцию
+	return &SendResponse{
+		Receipt:    respBody,
+		RawMessage: response,
+	}, nil
+}
+
+// SendRaw отправляет готовое бинарное сообщение в ОФД
+func (c *ofdClient) SendRaw(ctx context.Context, address string, rawMessage []byte) (*SendResponse, error) {
+	if len(rawMessage) == 0 {
+		return nil, ErrEmptyContainer
+	}
+
+	// Логируем отправку
+	if c.cfg.Logger != nil {
+		c.cfg.Logger(fmt.Sprintf("Sending RAW message to OFD, size: %d bytes", len(rawMessage)))
+	}
+
+	// Отправляем сообщение через транспорт
+	response, err := c.transport.Send(ctx, address, rawMessage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send raw message: %w", err)
+	}
+
+	// Десериализуем ответ, чтобы извлечь квитанцию (тело сообщения)
+	_, respBody, err := DeserializeMessage(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize response: %w", err)
+	}
+
+	// Проверяем, что ответ содержит контейнер (квитанцию)
+	if len(respBody) == 0 {
+		return nil, ErrNoContainer
+	}
+
 	return &SendResponse{
 		Receipt:    respBody,
 		RawMessage: response,

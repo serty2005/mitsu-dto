@@ -3,6 +3,7 @@ package driver
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 // OfdBeginRead начинает процедуру чтения первого непереданного документа для отправки в ОФД.
@@ -73,8 +74,8 @@ func (d *mitsuDriver) OfdEndRead() error {
 // receipt - бинарные данные квитанции
 // Команда: <Do OFD='LOAD' LENGTH='размер'>КВИТАНЦИЯ В HEX</OK>
 func (d *mitsuDriver) OfdLoadReceipt(receipt []byte) error {
-	hexData := hex.EncodeToString(receipt)
-	cmd := fmt.Sprintf("<Do OFD='LOAD' LENGTH='%d'>%s</OK>", len(receipt), hexData)
+	hexData := strings.ToUpper(hex.EncodeToString(receipt))
+	cmd := fmt.Sprintf("<DO OFD='LOAD' LENGTH='%d'>%s</DO>", len(receipt), hexData)
 
 	_, err := d.sendCommand(cmd)
 	if err != nil {
