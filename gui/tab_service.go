@@ -984,9 +984,9 @@ func GetServiceTab() d.TabPage {
 												Title:  "ОФД и ОИСМ",
 												Layout: d.Grid{Columns: 4, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
-													d.Label{AssignTo: &sLabels.OfdAddr, Text: "ОФД:"}, d.LineEdit{Text: d.Bind("OfdString"), MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OfdAddr, Text: "ОФД:"}, d.LineEdit{Text: d.Bind("OfdString"), MinSize: d.Size{Width: 130}, MaxSize: d.Size{Width: 130}, OnTextChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.OfdClient, Text: "Клиент:"}, d.ComboBox{Value: d.Bind("OfdClient"), BindingMember: "Code", DisplayMember: "Name", Model: listClients, OnCurrentIndexChanged: checkOfdClientChange, MaxSize: d.Size{Width: 100}},
-													d.Label{AssignTo: &sLabels.OismAddr, Text: "ОИСМ:"}, d.LineEdit{Text: d.Bind("OismString"), MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}, OnTextChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.OismAddr, Text: "ОИСМ:"}, d.LineEdit{Text: d.Bind("OismString"), MinSize: d.Size{Width: 130}, MaxSize: d.Size{Width: 130}, OnTextChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.TimerFN, Text: "Т. ФН:"}, d.NumberEdit{Value: d.Bind("TimerFN"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.Timezone, Text: "Пояс:"}, d.ComboBox{Value: d.Bind("OptTimezone"), BindingMember: "Code", DisplayMember: "Name", Model: listTimezones, MinSize: d.Size{Width: 110}, MaxSize: d.Size{Width: 120}, OnCurrentIndexChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.TimerOFD, Text: "Т. ОФД:"}, d.NumberEdit{Value: d.Bind("TimerOFD"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
@@ -994,19 +994,20 @@ func GetServiceTab() d.TabPage {
 											},
 											d.GroupBox{
 												Title:  "Принтер и Бумага",
-												Layout: d.Grid{Columns: 6, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
+												Layout: d.Grid{Columns: 6, Spacing: 2, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
 													d.Label{AssignTo: &sLabels.PrinterModel, Text: "Модель:"}, d.ComboBox{Value: d.Bind("PrintModel"), BindingMember: "Code", DisplayMember: "Name", Model: listModels, MaxSize: d.Size{Width: 70}, OnCurrentIndexChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.PrinterCut, Text: "Отрез:"}, d.CheckBox{Checked: d.Bind("OptCut"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterCut, Text: "Отрезчик:"}, d.CheckBox{Checked: d.Bind("OptCut"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.DrawerTrig, Text: "Ящик:", ToolTipText: "Условие автоматического открытия денежного ящика"}, d.ComboBox{Value: d.Bind("OptDrawerTrig"), BindingMember: "Code", DisplayMember: "Name", Model: listDrawerTrig, MaxSize: d.Size{Width: 80}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterPaper, Text: "Ширина:", ToolTipText: "Ширина бумаги"}, d.ComboBox{Value: d.Bind("PrintPaper"), BindingMember: "Code", DisplayMember: "Name", Model: listPapers, MaxSize: d.Size{Width: 70}, OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterSound, Text: "Звук:", ToolTipText: "Звук датчика окончания бумаги"}, d.CheckBox{Checked: d.Bind("OptNearEnd"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.DrawerPin, Text: "PIN:", ToolTipText: "Пин денежного ящика"}, d.NumberEdit{Value: d.Bind("DrawerPin"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterFont, Text: "Шрифт:", ToolTipText: "Шрифт А - стандартный, B - компактный"}, d.ComboBox{Value: d.Bind("PrintFont"), BindingMember: "Code", DisplayMember: "Name", Model: listFonts, MaxSize: d.Size{Width: 70}, ToolTipText: "A-стандратный, B-компактный", OnCurrentIndexChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.PrinterTest, Text: "Тест:", ToolTipText: "Тест страница при запуске"}, d.CheckBox{Checked: d.Bind("OptAutoTest"), OnCheckStateChanged: recalcChanges},
+													d.Label{AssignTo: &sLabels.DrawerRise, Text: "Rise:", ToolTipText: "Время нарастания импульса открывания в миллисекундах."}, d.NumberEdit{Value: d.Bind("DrawerRise"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.PrinterBaud, Text: "Бод:"}, d.ComboBox{Value: d.Bind("PrintBaud"), BindingMember: "Code", DisplayMember: "Name", Model: listBaud, MaxSize: d.Size{Width: 70}, OnCurrentIndexChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.PrinterSound, Text: "Звук:"}, d.CheckBox{Checked: d.Bind("OptNearEnd"), OnCheckStateChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.PrinterPaper, Text: "Ширина:"}, d.ComboBox{Value: d.Bind("PrintPaper"), BindingMember: "Code", DisplayMember: "Name", Model: listPapers, MaxSize: d.Size{Width: 70}, OnCurrentIndexChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.PrinterTest, Text: "Тест:"}, d.CheckBox{Checked: d.Bind("OptAutoTest"), OnCheckStateChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.PrinterFont, Text: "Шрифт:"}, d.ComboBox{Value: d.Bind("PrintFont"), BindingMember: "Code", DisplayMember: "Name", Model: listFonts, MaxSize: d.Size{Width: 70}, ToolTipText: "A-стандратный, B-компактный", OnCurrentIndexChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.DrawerTrig, Text: "Триггер:"}, d.ComboBox{Value: d.Bind("OptDrawerTrig"), BindingMember: "Code", DisplayMember: "Name", Model: listDrawerTrig, MaxSize: d.Size{Width: 80}, OnCurrentIndexChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.DrawerPin, Text: "PIN:"}, d.NumberEdit{Value: d.Bind("DrawerPin"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.DrawerRise, Text: "Rise:"}, d.NumberEdit{Value: d.Bind("DrawerRise"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.DrawerFall, Text: "Fall:"}, d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
+													d.HSpacer{ColumnSpan: 2},
+													d.Label{AssignTo: &sLabels.DrawerFall, Text: "Fall:", ToolTipText: "Время спада импульса в миллисекундах"}, d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
 												},
 											},
 										},
@@ -1014,7 +1015,7 @@ func GetServiceTab() d.TabPage {
 
 									// КОЛОНКА 2
 									d.Composite{
-										Layout: d.HBox{MarginsZero: true, Spacing: 4},
+										Layout: d.VBox{MarginsZero: true, Spacing: 4},
 										Children: []d.Widget{
 											d.GroupBox{
 												Title:  "Сеть (LAN)",
@@ -1027,20 +1028,10 @@ func GetServiceTab() d.TabPage {
 												},
 											},
 											d.GroupBox{
-												Title:  "Денежный ящик",
-												Layout: d.Grid{Columns: 2, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
-												Children: []d.Widget{
-													d.Label{AssignTo: &sLabels.DrawerTrig, Text: "Триггер:"}, d.ComboBox{Value: d.Bind("OptDrawerTrig"), BindingMember: "Code", DisplayMember: "Name", Model: listDrawerTrig, MaxSize: d.Size{Width: 80}, OnCurrentIndexChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.DrawerPin, Text: "PIN:"}, d.NumberEdit{Value: d.Bind("DrawerPin"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.DrawerRise, Text: "Rise:"}, d.NumberEdit{Value: d.Bind("DrawerRise"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
-													d.Label{AssignTo: &sLabels.DrawerFall, Text: "Fall:"}, d.NumberEdit{Value: d.Bind("DrawerFall"), MaxSize: d.Size{Width: 40}, OnValueChanged: recalcChanges},
-												},
-											},
-											d.GroupBox{
 												Title:  "Вид чека и Опции",
 												Layout: d.Grid{Columns: 4, Spacing: 4, Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}},
 												Children: []d.Widget{
-													d.Label{AssignTo: &sLabels.OptQRPos, Text: "QR:"},
+													d.Label{AssignTo: &sLabels.OptQRPos, Text: "QR:", ToolTipText: "Позиция QR-кода"},
 													d.ComboBox{Value: d.Bind("OptQRPos"), BindingMember: "Code", DisplayMember: "Name", Model: listQRPos, MaxSize: d.Size{Width: 40}, OnCurrentIndexChanged: recalcChanges},
 													d.Label{AssignTo: &sLabels.OptTextQR, Text: "Текст QR:"},
 													d.CheckBox{Checked: d.Bind("OptTextQR"), OnCheckStateChanged: recalcChanges},

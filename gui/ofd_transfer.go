@@ -128,7 +128,7 @@ func SendFirstUnsentDocument(drv driver.Driver) (*OfdTransferResult, error) {
 	log.Printf("[OFD] Успешная отправка. Получен ответ длиной %d байт", len(resp.RawMessage))
 
 	// 6. Записываем квитанцию в ФН
-	// ИСПРАВЛЕНО: ФН требует ПОЛНОЕ сообщение (RawMessage) включая заголовок 30 байт,
+	// ФН требует ПОЛНОЕ сообщение (RawMessage) включая заголовок 30 байт,
 	// а не только тело квитанции (Receipt).
 	if err := drv.OfdLoadReceipt(resp.RawMessage); err != nil {
 		return nil, fmt.Errorf("ошибка записи квитанции: %w", err)
@@ -140,6 +140,9 @@ func SendFirstUnsentDocument(drv driver.Driver) (*OfdTransferResult, error) {
 	result.ErrorMessage = fmt.Sprintf(
 		"Документ успешно отправлен в ОФД.\nФН: %s\nКвитанция: %d байт",
 		fnSerial, len(resp.Receipt))
+
+	// Обновляем информацию о неотправленных документах
+	drv.GetShiftStatus()
 
 	return result, nil
 }

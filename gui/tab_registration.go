@@ -245,24 +245,24 @@ func GetRegistrationTab() d.TabPage {
 			// --- 3. Блок: Причины (слева) + ОФД (справа) ---
 			d.Composite{
 				// Выравнивание по верху, чтобы блоки не разъезжались по высоте
-				Layout: d.HBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 10, Alignment: d.Alignment2D(d.AlignNear)},
+				Layout: d.HBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 3, Alignment: d.Alignment2D(d.AlignNear)},
 				Children: []d.Widget{
 
 					// ПРАВАЯ ЧАСТЬ: ОФД
 					d.GroupBox{
 						Title:         "Оператор фискальных данных",
 						StretchFactor: 2, // Занимает 2 части ширины (шире, чем причины)
-						Layout:        d.VBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 5},
+						Layout:        d.VBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 3},
 						Children: []d.Widget{
 							d.Composite{
-								Layout: d.HBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 5},
+								Layout: d.HBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 3},
 								Children: []d.Widget{
 									d.Label{Text: "ИНН ОФД:", TextAlignment: d.AlignFar},
 									d.LineEdit{Text: d.Bind("OFDINN")},
 								},
 							},
 							d.Composite{
-								Layout: d.HBox{Margins: d.Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 5},
+								Layout: d.HBox{Margins: d.Margins{Left: 4, Top: 4, Right: 4, Bottom: 4}, Spacing: 3},
 								Children: []d.Widget{
 									d.Label{Text: "Наименование ОФД:", TextAlignment: d.AlignFar},
 									d.LineEdit{Text: d.Bind("OFDName")},
