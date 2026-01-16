@@ -1,8 +1,11 @@
 package gui
 
 import (
+	"context"
 	"fmt"
 	"mitsuscanner/driver"
+	"mitsuscanner/pkg/ofdclient"
+	"time"
 )
 
 // OfdTransferResult содержит результат передачи документа
@@ -56,12 +59,13 @@ func SendFirstUnsentDocument(drv driver.Driver) (*OfdTransferResult, error) {
 		}
 	}()
 
-	// 3. Получаем номер ФН для клиента ОФД
+	// 3. Получаем номер ФН и версию ФФД для клиента ОФД
 	fnStatus, err := drv.GetFnStatus()
 	if err != nil {
 		return nil, fmt.Errorf("ошибка получения статуса ФН: %w", err)
 	}
 	fnSerial := fnStatus.Serial
+	ffdVersion := fnStatus.Ffd
 
 	// 4. Читаем документ из ККТ
 	docData, err := drv.OfdReadFullDocument()
@@ -69,30 +73,41 @@ func SendFirstUnsentDocument(drv driver.Driver) (*OfdTransferResult, error) {
 		return nil, fmt.Errorf("ошибка чтения документа: %w", err)
 	}
 
-	// 5. ЗАГЛУШКА: Отправка в ОФД
-	// TODO: Интеграция с реальным клиентом ОФД
-	// receipt, err := ofdClient.SendDocument(fnSerial, docData)
-	// if err != nil {
-	//     return nil, fmt.Errorf("ошибка отправки в ОФД: %w", err)
-	// }
+	// 5. Отправка в ОФД с использованием нового клиента
+	client := ofdclient.New(ofdclient.Config{
+		Timeout:       300 * time.Second,
+		RetryCount:    3,
+		RetryInterval: 5 * time.Second,
+	})
+	defer client.Close()
 
-	// Пока используем заглушку
-	_ = fnSerial
-	_ = docData
+	// Формируем запрос
+	req := ofdclient.SendRequest{
+		OfdAddress: fmt.Sprintf("%s:%d", ofdSettings.Addr, ofdSettings.Port),
+		FnNumber:   fnSerial,
+		FFDVersion: ofdclient.FnFFDCodeToVersion(ffdVersion),
+		Container:  docData,
+	}
 
-	result.Success = false
+	// Отправляем документ
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	resp, err := client.Send(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка отправки в ОФД: %w", err)
+	}
+
+	// 6. Записываем квитанцию в ФН
+	if err := drv.OfdLoadReceipt(resp.Receipt); err != nil {
+		return nil, fmt.Errorf("ошибка записи квитанции: %w", err)
+	}
+
+	result.Success = true
+	result.DocumentsSent = 1
 	result.ErrorMessage = fmt.Sprintf(
-		"Документ прочитан (%d байт). Клиент ОФД ещё не реализован.\n"+
-			"ФН: %s\nНеотправленных: %d",
-		len(docData), fnSerial, ofdStatus.Count)
-
-	// 6. Записываем квитанцию в ФН (когда будет реальный клиент)
-	// if err := drv.OfdLoadReceipt(receipt); err != nil {
-	//     return nil, fmt.Errorf("ошибка записи квитанции: %w", err)
-	// }
-
-	// result.Success = true
-	// result.DocumentsSent = 1
+		"Документ успешно отправлен в ОФД.\nФН: %s\nКвитанция: %d байт",
+		fnSerial, len(resp.Receipt))
 
 	return result, nil
 }
