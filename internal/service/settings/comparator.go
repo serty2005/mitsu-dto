@@ -1,12 +1,14 @@
-package service
+package settings
 
 import (
 	"fmt"
-	"mitsuscanner/pkg/mitsudriver"
+
+	"mitsuscanner/internal/domain/models"
+	"mitsuscanner/internal/domain/ports"
 )
 
-// Compare сравнивает два снапшота и возвращает список атомарных изменений.
-func Compare(initial, current *SettingsSnapshot) []Change {
+// Compare сравнивает два снапшота настроек и возвращает список атомарных изменений
+func Compare(initial, current *models.SettingsSnapshot) []Change {
 	var changes []Change
 
 	if initial == nil || current == nil {
@@ -18,29 +20,29 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 	if pOld.Model != pNew.Model {
 		changes = append(changes, Change{
 			ID: "Printer_Model", Description: "Модель принтера",
-			OldValue: pOld.Model, NewValue: pNew.Model, Priority: PriorityNormal,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetPrinterSettings(current.Printer) },
+			OldValue: pOld.Model, NewValue: pNew.Model, Priority: models.PriorityNormal,
+			ApplyFunc: func(d ports.Driver) error { return d.SetPrinterSettings(current.Printer) },
 		})
 	}
 	if pOld.BaudRate != pNew.BaudRate {
 		changes = append(changes, Change{
 			ID: "Printer_Baud", Description: "Скорость печати",
-			OldValue: pOld.BaudRate, NewValue: pNew.BaudRate, Priority: PriorityNormal,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetPrinterSettings(current.Printer) },
+			OldValue: pOld.BaudRate, NewValue: pNew.BaudRate, Priority: models.PriorityNormal,
+			ApplyFunc: func(d ports.Driver) error { return d.SetPrinterSettings(current.Printer) },
 		})
 	}
 	if pOld.Paper != pNew.Paper {
 		changes = append(changes, Change{
 			ID: "Printer_Paper", Description: "Ширина ленты",
-			OldValue: fmt.Sprintf("%dмм", pOld.Paper), NewValue: fmt.Sprintf("%dмм", pNew.Paper), Priority: PriorityNormal,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetPrinterSettings(current.Printer) },
+			OldValue: fmt.Sprintf("%dмм", pOld.Paper), NewValue: fmt.Sprintf("%dмм", pNew.Paper), Priority: models.PriorityNormal,
+			ApplyFunc: func(d ports.Driver) error { return d.SetPrinterSettings(current.Printer) },
 		})
 	}
 	if pOld.Font != pNew.Font {
 		changes = append(changes, Change{
 			ID: "Printer_Font", Description: "Шрифт принтера",
-			OldValue: pOld.Font, NewValue: pNew.Font, Priority: PriorityNormal,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetPrinterSettings(current.Printer) },
+			OldValue: pOld.Font, NewValue: pNew.Font, Priority: models.PriorityNormal,
+			ApplyFunc: func(d ports.Driver) error { return d.SetPrinterSettings(current.Printer) },
 		})
 	}
 
@@ -51,8 +53,8 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 			ID: "Drawer_Settings", Description: "Параметры ден. ящика",
 			OldValue:  fmt.Sprintf("Pin:%d, R:%d, F:%d", dOld.Pin, dOld.Rise, dOld.Fall),
 			NewValue:  fmt.Sprintf("Pin:%d, R:%d, F:%d", dNew.Pin, dNew.Rise, dNew.Fall),
-			Priority:  PriorityNormal,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetMoneyDrawerSettings(current.Drawer) },
+			Priority:  models.PriorityNormal,
+			ApplyFunc: func(d ports.Driver) error { return d.SetMoneyDrawerSettings(current.Drawer) },
 		})
 	}
 
@@ -60,8 +62,8 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 	if initial.Timezone != current.Timezone {
 		changes = append(changes, Change{
 			ID: "Timezone", Description: "Часовой пояс",
-			OldValue: initial.Timezone, NewValue: current.Timezone, Priority: PriorityNormal,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetTimezone(current.Timezone) },
+			OldValue: initial.Timezone, NewValue: current.Timezone, Priority: models.PriorityNormal,
+			ApplyFunc: func(d ports.Driver) error { return d.SetTimezone(current.Timezone) },
 		})
 	}
 
@@ -70,8 +72,8 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 		if oldV != newV {
 			changes = append(changes, Change{
 				ID: id, Description: "Опция: " + name,
-				OldValue: oldV, NewValue: newV, Priority: PriorityNormal,
-				ApplyFunc: func(d mitsudriver.Driver) error { return d.SetOption(optNum, newV) },
+				OldValue: oldV, NewValue: newV, Priority: models.PriorityNormal,
+				ApplyFunc: func(d ports.Driver) error { return d.SetOption(optNum, newV) },
 			})
 		}
 	}
@@ -93,15 +95,15 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 			ID: "Ofd_Addr", Description: "Адрес сервера ОФД",
 			OldValue:  fmt.Sprintf("%s:%d", ofdO.Addr, ofdO.Port),
 			NewValue:  fmt.Sprintf("%s:%d", ofdN.Addr, ofdN.Port),
-			Priority:  PriorityNormal,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetOfdSettings(current.Ofd) },
+			Priority:  models.PriorityNormal,
+			ApplyFunc: func(d ports.Driver) error { return d.SetOfdSettings(current.Ofd) },
 		})
 	}
 	if ofdO.Client != ofdN.Client {
 		changes = append(changes, Change{
 			ID: "Ofd_Client", Description: "Режим клиента ОФД",
-			OldValue: ofdO.Client, NewValue: ofdN.Client, Priority: PriorityNormal,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetOfdSettings(current.Ofd) },
+			OldValue: ofdO.Client, NewValue: ofdN.Client, Priority: models.PriorityNormal,
+			ApplyFunc: func(d ports.Driver) error { return d.SetOfdSettings(current.Ofd) },
 		})
 	}
 	if ofdO.TimerFN != ofdN.TimerFN || ofdO.TimerOFD != ofdN.TimerOFD {
@@ -109,8 +111,8 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 			ID: "Ofd_Timers", Description: "Таймеры ОФД/ФН",
 			OldValue:  fmt.Sprintf("ФН:%d, ОФД:%d", ofdO.TimerFN, ofdO.TimerOFD),
 			NewValue:  fmt.Sprintf("ФН:%d, ОФД:%d", ofdN.TimerFN, ofdN.TimerOFD),
-			Priority:  PriorityNormal,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetOfdSettings(current.Ofd) },
+			Priority:  models.PriorityNormal,
+			ApplyFunc: func(d ports.Driver) error { return d.SetOfdSettings(current.Ofd) },
 		})
 	}
 
@@ -120,8 +122,8 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 			ID: "Oism_Addr", Description: "Адрес сервера ОИСМ",
 			OldValue:  fmt.Sprintf("%s:%d", initial.Oism.Addr, initial.Oism.Port),
 			NewValue:  fmt.Sprintf("%s:%d", current.Oism.Addr, current.Oism.Port),
-			Priority:  PriorityNormal,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetOismSettings(current.Oism) },
+			Priority:  models.PriorityNormal,
+			ApplyFunc: func(d ports.Driver) error { return d.SetOismSettings(current.Oism) },
 		})
 	}
 
@@ -132,28 +134,25 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 			ID: "Lan_Settings", Description: "Сетевые настройки LAN",
 			OldValue:  fmt.Sprintf("IP:%s, P:%d", lO.Addr, lO.Port),
 			NewValue:  fmt.Sprintf("IP:%s, P:%d", lN.Addr, lN.Port),
-			Priority:  PriorityNetwork,
-			ApplyFunc: func(d mitsudriver.Driver) error { return d.SetLanSettings(current.Lan) },
+			Priority:  models.PriorityNetwork,
+			ApplyFunc: func(d ports.Driver) error { return d.SetLanSettings(current.Lan) },
 		})
 	}
 
 	// --- 8. КЛИШЕ (Построчное сравнение и запись) ---
-	// ИЗМЕНЕНО: Теперь генерируем отдельные команды для каждой строки, которая изменилась
-	// и не является пустой.
 	clicheNames := map[int]string{1: "Заголовок", 2: "После пользователя", 3: "Подвал", 4: "Конец чека"}
 
 	for typeID := 1; typeID <= 4; typeID++ {
 		oldLines := initial.Cliches[typeID]
 		newLines := current.Cliches[typeID]
 
-		// Получаем максимальную длину, чтобы проверить все строки
 		maxLen := len(oldLines)
 		if len(newLines) > maxLen {
 			maxLen = len(newLines)
 		}
 
 		for i := 0; i < maxLen; i++ {
-			var oldL, newL mitsudriver.ClicheLineData
+			var oldL, newL models.ClicheLineData
 			if i < len(oldLines) {
 				oldL = oldLines[i]
 			}
@@ -161,36 +160,31 @@ func Compare(initial, current *SettingsSnapshot) []Change {
 				newL = newLines[i]
 			}
 
-			// Проверяем изменение
-			if oldL.Text != newL.Text || oldL.Format != newL.Format {
-				// ВАЖНО: Пропускаем пустые строки согласно требованию
-				// "не отправлять нулевые и неизменённые строки"
-				if newL.Text == "" {
-					continue
-				}
-
-				tid := typeID
-				lineNum := i
-				// Замыкаем значения для ApplyFunc
-				finalText := newL.Text
-				finalFormat := newL.Format
-
-				// Формируем описание для диалога
-				oldVal := fmt.Sprintf("\"%s-%s\"", oldL.Format, oldL.Text)
-				newVal := fmt.Sprintf("\"%s-%s\"", newL.Format, newL.Text)
-
-				changes = append(changes, Change{
-					ID:          fmt.Sprintf("Cliche_%d_%d", tid, lineNum),
-					Description: fmt.Sprintf("Клише \"%s\", Строка %d", clicheNames[tid], lineNum+1),
-					OldValue:    oldVal,
-					NewValue:    newVal,
-					Priority:    PriorityCliche,
-					ApplyFunc: func(d mitsudriver.Driver) error {
-						// Вызываем атомарную команду записи строки
-						return d.SetHeaderLine(tid, lineNum, finalText, finalFormat)
-					},
-				})
+			// Пропускаем, только если обе строки идентичны (или обе пустые).
+			// Изменение (включая очистку) будет обработано.
+			if oldL.Text == newL.Text && oldL.Format == newL.Format {
+				continue
 			}
+
+			// Если дошли сюда, значит есть изменение.
+			tid := typeID
+			lineNum := i
+			finalText := newL.Text
+			finalFormat := newL.Format
+
+			oldVal := fmt.Sprintf("\"%s-%s\"", oldL.Format, oldL.Text)
+			newVal := fmt.Sprintf("\"%s-%s\"", newL.Format, newL.Text)
+
+			changes = append(changes, Change{
+				ID:          fmt.Sprintf("Cliche_%d_%d", tid, lineNum),
+				Description: fmt.Sprintf("Клише \"%s\", Строка %d", clicheNames[tid], lineNum+1),
+				OldValue:    oldVal,
+				NewValue:    newVal,
+				Priority:    models.PriorityCliche,
+				ApplyFunc: func(d ports.Driver) error {
+					return d.SetHeaderLine(tid, lineNum, finalText, finalFormat)
+				},
+			})
 		}
 	}
 

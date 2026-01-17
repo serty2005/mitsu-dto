@@ -1,57 +1,53 @@
 package service
 
 import (
-	"mitsuscanner/driver"
+	"mitsuscanner/internal/domain/models"
+	"mitsuscanner/pkg/mitsudriver"
 )
 
-// Priority определяет порядок применения настроек.
-type Priority int
-
+// Priority aliases для совместимости
 const (
-	PriorityNormal   Priority = 0 // Обычные настройки (Опции, Принтер)
-	PriorityCliche   Priority = 1 // Клише (много данных, лучше отдельно)
-	PriorityNetwork  Priority = 2 // Сеть (может разорвать соединение, строго в конце)
-	PriorityCritical Priority = 3 // Критические операции (если появятся)
+	PriorityNormal   = models.PriorityNormal
+	PriorityCliche   = models.PriorityCliche
+	PriorityNetwork  = models.PriorityNetwork
+	PriorityCritical = models.PriorityCritical
 )
 
 // SettingsSnapshot представляет собой полный слепок настроек вкладки "Сервис".
 type SettingsSnapshot struct {
 	// Сеть и связь
-	Ofd      driver.OfdSettings
-	Oism     driver.ServerSettings
-	Lan      driver.LanSettings
+	Ofd      mitsudriver.OfdSettings
+	Oism     mitsudriver.OismSettings
+	Lan      mitsudriver.LanSettings
 	Timezone int
 
 	// Оборудование
-	Printer driver.PrinterSettings
-	Drawer  driver.DrawerSettings
+	Printer mitsudriver.PrinterSettings
+	Drawer  mitsudriver.DrawerSettings
 
 	// Опции (b0-b9)
 	// Храним как плоскую структуру для удобства сравнения
-	Options driver.DeviceOptions
+	Options mitsudriver.DeviceOptions
 
 	// Клише
 	// Ключ map - номер типа клише (1..4). Значение - массив строк.
-	Cliches map[int][]driver.ClicheLineData
+	Cliches map[int][]mitsudriver.ClicheLineData
 }
 
 // Change представляет одно атомарное (или групповое) изменение настроек.
 type Change struct {
-	ID          string      // Уникальный ID поля (для подсветки в GUI)
-	Description string      // Человекочитаемое описание изменения
-	OldValue    interface{} // Значение "Было" (для отображения)
-	NewValue    interface{} // Значение "Стало" (для отображения)
-	Priority    Priority    // Приоритет выполнения
-
-	// ApplyFunc - замыкание, которое применит это изменение к драйверу.
-	// Будет сформировано на этапе сравнения.
-	ApplyFunc func(d driver.Driver) error
+	ID          string                           // Уникальный ID поля (для подсветки в GUI)
+	Description string                           // Человекочитаемое описание изменения
+	OldValue    interface{}                      // Значение "Было" (для отображения)
+	NewValue    interface{}                      // Значение "Стало" (для отображения)
+	Priority    models.Priority                  // Приоритет выполнения
+	ApplyFunc   func(d mitsudriver.Driver) error // ApplyFunc - замыкание, которое применит это изменение к драйверу.
 }
 
 // NewSettingsSnapshot создает пустой снапшот с инициализированной картой клише.
 func NewSettingsSnapshot() *SettingsSnapshot {
 	return &SettingsSnapshot{
-		Cliches: make(map[int][]driver.ClicheLineData),
+		Cliches: make(map[int][]mitsudriver.ClicheLineData),
 	}
 }
 
@@ -61,7 +57,7 @@ func (s *SettingsSnapshot) IsZero() bool {
 }
 
 // Helper: deepEqual для срезов клише
-func clichesEqual(a, b []driver.ClicheLineData) bool {
+func clichesEqual(a, b []mitsudriver.ClicheLineData) bool {
 	if len(a) != len(b) {
 		return false
 	}
