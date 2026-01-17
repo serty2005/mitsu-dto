@@ -1152,7 +1152,7 @@ func GetServiceTab() d.TabPage {
 									d.GroupBox{
 										AssignTo: &clicheEditorGroup,
 										Title:    "Настройки строки",
-										Layout:   d.VBox{Margins: d.Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}, Spacing: 8},
+										Layout:   d.VBox{Margins: d.Margins{Left: 5, Top: 5, Right: 5, Bottom: 5}, Spacing: 3},
 										Enabled:  false,
 										MaxSize:  d.Size{Width: 300, Height: 250},
 										DataBinder: d.DataBinder{
