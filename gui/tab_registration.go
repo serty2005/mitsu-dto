@@ -700,8 +700,6 @@ func onSendToOfd() {
 				walk.MsgBox(mw, "Информация", result.ErrorMessage, walk.MsgBoxIconWarning)
 			}
 
-			// Обновляем информацию о ФН
-			onRefreshFnInfo()
 		})
 	}()
 }

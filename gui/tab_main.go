@@ -63,7 +63,7 @@ func RunApp() error {
 	err := d.MainWindow{
 		AssignTo: &mw,
 		Title:    "Mitsu Driver Utility",
-		// Фиксируем размер окна (600x600)
+		// Фиксируем размер окна (400x600)
 		Size:    d.Size{Width: 400, Height: 600},
 		MinSize: d.Size{Width: 400, Height: 600},
 		MaxSize: d.Size{Width: 400, Height: 600},
@@ -104,9 +104,6 @@ func RunApp() error {
 						},
 					},
 
-					// РАЗДЕЛИТЕЛЬ
-					// d.VSeparator{},
-
 					// ПРАВАЯ ЧАСТЬ: Инфо о ККТ (Model, SN, Reboot status)
 					d.Composite{
 						AssignTo: &kktInfoComposite,
@@ -122,17 +119,19 @@ func RunApp() error {
 								Text:        "⦿", // Кружок
 								Font:        d.Font{PointSize: 14, Bold: true},
 								TextColor:   walk.RGB(0, 200, 0), // Зеленый
-								ToolTipText: "Зеленый: Норма (Флаг=1)\nКрасный: Был сбой питания (Флаг=0)",
+								ToolTipText: "ON: Норма (Флаг=1)\nOFF: Был сбой питания (Флаг=0)",
 							},
 						},
 					},
 					// Растяжка, чтобы прижать всё влево
-					d.HSpacer{},
+					// d.HSpacer{},
 				},
 			},
 
 			// --- Вкладки ---
 			d.TabWidget{
+				MinSize: d.Size{Height: 500},
+				MaxSize: d.Size{Height: 500},
 				Pages: []d.TabPage{
 					// 1. Информация
 					{
@@ -145,6 +144,8 @@ func RunApp() error {
 								ReadOnly: true,
 								VScroll:  true,
 								Font:     d.Font{Family: "Consolas", PointSize: 9},
+								MinSize:  d.Size{Height: 400},
+								MaxSize:  d.Size{Height: 400},
 							},
 							// Панель операционных кнопок
 							d.Composite{
@@ -180,12 +181,12 @@ func RunApp() error {
 						Title:    "Лог",
 						Layout:   d.VBox{MarginsZero: true},
 						MinSize:  d.Size{Height: 150},
-						MaxSize:  d.Size{Height: 200},
+						MaxSize:  d.Size{Height: 150},
 						Children: []d.Widget{
 							d.Composite{
 								Layout: d.HBox{MarginsZero: true},
 								Children: []d.Widget{
-									d.HSpacer{},
+									// d.HSpacer{},
 									d.PushButton{Text: "🔽 Свернуть", OnClicked: toggleLog, MaxSize: d.Size{Width: 80}},
 								},
 							},
@@ -204,13 +205,12 @@ func RunApp() error {
 						Layout:   d.HBox{Margins: d.Margins{Left: 5, Top: 2, Right: 5, Bottom: 2}},
 						Children: []d.Widget{
 							d.PushButton{Text: "🔼 Лог", OnClicked: toggleLog, MaxSize: d.Size{Width: 60}},
-							// ИЗМЕНЕНО: Добавлен EllipsisMode и MaxSize для предотвращения растягивания
 							d.Label{
 								AssignTo:      &logPreviewLabel,
 								Text:          "...",
 								TextAlignment: d.AlignNear,
 								EllipsisMode:  d.EllipsisEnd,      // Обрезать текст с конца "..."
-								MaxSize:       d.Size{Width: 500}, // Жесткий лимит ширины (600 - кнопка - отступы)
+								MaxSize:       d.Size{Width: 550}, // Жесткий лимит ширины (600 - кнопка - отступы)
 							},
 						},
 					},
@@ -335,12 +335,9 @@ func onConnectSuccess(drv driver.Driver, cfg driver.Config) {
 
 	// 3. УСТАНОВКА ФЛАГА ПИТАНИЯ
 	// Устанавливаем 1 (TRUE), чтобы обозначить "Мы контролируем ситуацию".
-	// Если ККТ перезагрузится, она (вероятно) сбросит флаг в 0.
+	// Если ККТ перезагрузится, она сбросит флаг в 0.
 	if err := drv.SetPowerFlag(1); err != nil {
 		logMsg("[WARN] Не удалось установить флаг питания: %v", err)
-	} else {
-		// Не пишем в лог, чтобы не шуметь, или пишем только в DEBUG
-		// logMsg("[SYSTEM] Флаг питания установлен (1).")
 	}
 
 	// 4. Запускаем мониторинг (передаем статику)
@@ -624,6 +621,10 @@ func refreshInfo() {
 			}
 			lines = append(lines, kv{"Неотправленных ФД", ofdInfo})
 
+			// Обновление счётчика неотправленных документов в панели статуса
+			if unsentDocsLabel != nil {
+				unsentDocsLabel.SetText(fmt.Sprintf("ОФД: %d", sh.Ofd.Count))
+			}
 		} else {
 			lines = append(lines, kv{"Смена", "Ошибка получения статуса"})
 		}

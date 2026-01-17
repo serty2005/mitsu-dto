@@ -141,8 +141,14 @@ func SendFirstUnsentDocument(drv driver.Driver) (*OfdTransferResult, error) {
 		"Документ успешно отправлен в ОФД.\nФН: %s\nКвитанция: %d байт",
 		fnSerial, len(resp.Receipt))
 
-	// Обновляем информацию о неотправленных документах
-	drv.GetShiftStatus()
+	// Обновляем информацию о неотправленных
+	sh, err := drv.GetShiftStatus()
+	if err == nil {
+		// Обновление счётчика неотправленных документов в панели статуса
+		if unsentDocsLabel != nil {
+			unsentDocsLabel.SetText(fmt.Sprintf("ОФД: %d", sh.Ofd.Count))
+		}
+	}
 
 	return result, nil
 }

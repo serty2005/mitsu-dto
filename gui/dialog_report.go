@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"mitsuscanner/driver"
@@ -243,11 +244,9 @@ func RunReportModal(owner walk.Form, meta driver.ReportMeta) {
 					},
 					d.PushButton{
 						AssignTo: &savePB,
-						Text:     "Сохранить",
+						Text:     "Сохранить...",
 						OnClicked: func() {
-							if err := saveReportText(text, meta.Kind); err != nil {
-								walk.MsgBox(dlg, "Ошибка", err.Error(), walk.MsgBoxIconError)
-							}
+							saveReportWithDialog(dlg, meta, text)
 						},
 					},
 					d.PushButton{
@@ -277,6 +276,56 @@ func RunRegistrationTextDialog(owner walk.Form, regData driver.RegData) {
 		Data:  regData,
 	}
 	RunReportModal(owner, meta)
+}
+
+// saveReportWithDialog открывает системный диалог сохранения файла.
+func saveReportWithDialog(owner walk.Form, meta driver.ReportMeta, text string) {
+	dlg := new(walk.FileDialog)
+
+	// Формируем имя файла по умолчанию: РНМ + Дата
+	defaultName := generateReportFileName(meta)
+	dlg.FilePath = defaultName
+	dlg.Filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*"
+	dlg.Title = "Сохранить отчет"
+
+	// Пытаемся открыть в "Документах"
+	if home, err := os.UserHomeDir(); err == nil {
+		dlg.InitialDirPath = filepath.Join(home, "Documents")
+	}
+
+	if ok, _ := dlg.ShowSave(owner); ok {
+		if err := os.WriteFile(dlg.FilePath, []byte(text), 0644); err != nil {
+			walk.MsgBox(owner, "Ошибка", "Не удалось сохранить файл:\n"+err.Error(), walk.MsgBoxIconError)
+		} else {
+			walk.MsgBox(owner, "Успех", "Файл успешно сохранен.", walk.MsgBoxIconInformation)
+		}
+	}
+}
+
+// generateReportFileName создает имя файла вида "РНМ_YYYYMMDD.txt"
+func generateReportFileName(meta driver.ReportMeta) string {
+	rnm := ""
+
+	// Пытаемся извлечь РНМ из данных
+	switch d := meta.Data.(type) {
+	case driver.RegData:
+		rnm = d.RNM
+	case *driver.RegData:
+		rnm = d.RNM
+	case driver.ReportFnCloseData:
+		rnm = d.RNM
+	case *driver.ReportFnCloseData:
+		rnm = d.RNM
+	}
+
+	// Очистка РНМ от пробелов
+	rnm = strings.ReplaceAll(rnm, " ", "")
+	if rnm == "" {
+		rnm = "Report"
+	}
+
+	dateStr := time.Now().Format("20060102") // YYYYMMDD
+	return fmt.Sprintf("%s_%s.txt", rnm, dateStr)
 }
 
 // saveReportText сохраняет текст отчета в соответствующую папку.
