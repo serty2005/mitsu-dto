@@ -336,9 +336,9 @@ func onCalcRNM() {
 	// Пытаемся получить заводской номер из драйвера
 	serial := ""
 	if driver.Active != nil {
-		info, err := driver.Active.GetFiscalInfo()
-		if err == nil && info != nil {
-			serial = info.SerialNumber
+		_, sn, _, err := driver.Active.GetVersion()
+		if err == nil {
+			serial = sn
 		}
 	}
 

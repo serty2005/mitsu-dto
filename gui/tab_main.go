@@ -583,30 +583,37 @@ func refreshInfo() {
 	mw.Synchronize(func() { infoView.SetText("Загрузка данных...") })
 
 	go func() {
-		info, err := drv.GetFiscalInfo()
-		if err != nil {
-			mw.Synchronize(func() {
-				infoView.SetText(fmt.Sprintf("ОШИБКА ПОЛУЧЕНИЯ ДАННЫХ:\r\n%v", err))
-			})
-			return
-		}
-
 		type kv struct {
 			k, v string
 		}
 		var lines []kv
 
-		lines = append(lines, kv{"Модель ККТ", info.ModelName})
-		lines = append(lines, kv{"Заводской номер", info.SerialNumber})
-		lines = append(lines, kv{"Версия прошивки", info.SoftwareDate})
-		lines = append(lines, kv{"РНМ", info.RNM})
-		lines = append(lines, kv{"ИНН организации", info.Inn})
-		lines = append(lines, kv{"Организация", info.OrganizationName})
-		lines = append(lines, kv{"ОФД", info.OfdName})
-		lines = append(lines, kv{"Дата регистрации", info.RegistrationDate})
-		lines = append(lines, kv{"Версия ФФД", info.FfdVersion})
-		lines = append(lines, kv{"Срок действия ФН", info.FnEndDate})
-		lines = append(lines, kv{"Исполнение ФН", info.FnEdition})
+		// Модель
+		if model, err := drv.GetModel(); err == nil {
+			lines = append(lines, kv{"Модель ККТ", model})
+		}
+
+		// Заводской номер и версия прошивки
+		if ver, sn, _, err := drv.GetVersion(); err == nil {
+			lines = append(lines, kv{"Заводской номер", sn})
+			lines = append(lines, kv{"Версия прошивки", ver})
+		}
+
+		// Регистрационные данные
+		if regData, err := drv.GetRegistrationData(); err == nil {
+			lines = append(lines, kv{"РНМ", regData.RNM})
+			lines = append(lines, kv{"ИНН организации", regData.Inn})
+			lines = append(lines, kv{"Организация", regData.OrgName})
+			lines = append(lines, kv{"ОФД", regData.OfdName})
+			lines = append(lines, kv{"Дата регистрации", regData.RegDate})
+			lines = append(lines, kv{"Версия ФФД", regData.FfdVer})
+		}
+
+		// Статус ФН
+		if fnStatus, err := drv.GetFnStatus(); err == nil {
+			lines = append(lines, kv{"Срок действия ФН", fnStatus.Valid})
+			lines = append(lines, kv{"Исполнение ФН", fnStatus.Edition})
+		}
 
 		sh, err := drv.GetShiftStatus()
 		if err == nil {

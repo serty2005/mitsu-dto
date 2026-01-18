@@ -6,7 +6,6 @@ import "time"
 type Driver interface {
 	Connect() error
 	Disconnect() error
-	GetFiscalInfo() (*FiscalInfo, error)
 	GetModel() (string, error)
 	GetVersion() (string, string, string, error)
 	GetDateTime() (time.Time, error)
